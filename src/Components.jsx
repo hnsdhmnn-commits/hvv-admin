@@ -622,31 +622,17 @@ function FormEpisodio({apiKey,onSalvo,onCancelar}){
       const match=raw.match(/\{[\s\S]*\}/);
       if(match){
         try{
-          // Tentar parse direto
-          const parsed=JSON.parse(match[0]);
+          // Sanitizar: remover trailing commas, comentários e caracteres de controle em strings
+          const sanitized=match[0]
+            .replace(/,\s*([}\]])/g,"$1")
+            .replace(/\/\/[^\n"]*/g,"")
+            .replace(/[\x00-\x1F\x7F]/g," ") // caracteres de controle
+            .replace(/\n\s*/g," "); // quebras de linha dentro de strings
+          const parsed=JSON.parse(sanitized);
           setSugestao(parsed);
           setEtapas((parsed.etapas||[]).map((e,i)=>({...e,id:"temp_"+i,incluir:true})));
-        }catch(parseErr){
-          // Se falhar, tentar sanitizar — remover trailing commas e comentários
-          const sanitized=match[0]
-            .replace(/,\s*([}\]])/g,"$1") // trailing commas
-            .replace(/\/\/[^\n]*/g,"")     // comentários de linha
-            .replace(/\/\*[\s\S]*?\*\//g,""); // comentários de bloco
-          try{
-            const parsed=JSON.parse(sanitized);
-            setSugestao(parsed);
-            setEtapas((parsed.etapas||[]).map((e,i)=>({...e,id:"temp_"+i,incluir:true})));
-          }catch(e2){
-            console.warn("JSON inválido mesmo após sanitização:",e2.message);
-            // Tentar extrair ao menos as etapas como array
-            const etapasMatch=sanitized.match(/"etapas"\s*:\s*(\[[\s\S]*?\])/);
-            if(etapasMatch){
-              try{
-                const etapas=JSON.parse(etapasMatch[1].replace(/,\s*]/g,"]"));
-                setEtapas(etapas.map((e,i)=>({...e,id:"temp_"+i,incluir:true})));
-              }catch(e3){console.warn("Não foi possível extrair etapas:",e3.message);}
-            }
-          }
+        }catch(e){
+          console.warn("JSON falhou:",e.message);
         }
       }
     }catch(e){console.warn(e);}
