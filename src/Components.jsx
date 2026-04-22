@@ -31,6 +31,9 @@ async function carregarEpisodios(){
 }
 
 async function carregarMetricasGerais(){
+  const inicio30=new Date(Date.now()-30*86400000).toISOString().slice(0,10);
+  const inicio90=new Date(Date.now()-90*86400000).toISOString().slice(0,10);
+
   const[
     {count:totalPacientes},
     {count:totalMedicos},
@@ -38,15 +41,27 @@ async function carregarMetricasGerais(){
     {count:totalCheckins},
     {data:docsRecentes},
     {data:diagsTop},
-    {data:planoAtivo},
+    {count:totalPlanoAtivo},
+    {data:agendamentos},
+    {data:avaliacoesCsat},
+    {data:avaliacoesNps},
+    {count:noShowPaciente},
+    {count:noShowMedico},
+    {count:cancelamentos},
   ]=await Promise.all([
     supabase.from("pacientes").select("*",{count:"exact",head:true}),
     supabase.from("medicos").select("*",{count:"exact",head:true}),
     supabase.from("agendamentos").select("*",{count:"exact",head:true}).eq("status","realizada"),
-    supabase.from("checkins").select("*",{count:"exact",head:true}).gte("data",new Date(Date.now()-30*86400000).toISOString().slice(0,10)),
-    supabase.from("documentos").select("tipo,created_at").gte("created_at",new Date(Date.now()-30*86400000).toISOString()).order("created_at",{ascending:false}),
-    supabase.from("diagnosticos").select("cid,nome").order("created_at",{ascending:false}).limit(200),
+    supabase.from("checkins").select("*",{count:"exact",head:true}).gte("data",inicio30),
+    supabase.from("documentos").select("tipo,created_at").gte("created_at",new Date(Date.now()-30*86400000).toISOString()),
+    supabase.from("diagnosticos").select("cid,nome").order("created_at",{ascending:false}).limit(300),
     supabase.from("plano_cuidado").select("*",{count:"exact",head:true}).eq("ativo",true),
+    supabase.from("agendamentos").select("status,medico_id,cancelado_por,created_at").gte("created_at",new Date(Date.now()-90*86400000).toISOString()),
+    supabase.from("avaliacoes").select("nota_csat,medico_id,created_at").eq("tipo","csat").gte("created_at",new Date(Date.now()-90*86400000).toISOString()),
+    supabase.from("avaliacoes").select("nota_nps,created_at").eq("tipo","nps").order("created_at",{ascending:false}),
+    supabase.from("agendamentos").select("*",{count:"exact",head:true}).eq("status","nao_compareceu_paciente"),
+    supabase.from("agendamentos").select("*",{count:"exact",head:true}).eq("status","nao_compareceu_medico"),
+    supabase.from("agendamentos").select("*",{count:"exact",head:true}).eq("status","cancelado"),
   ]);
 
   // Top CIDs
@@ -60,18 +75,39 @@ async function carregarMetricasGerais(){
     return{cid,nome,count:n};
   });
 
-  // Docs por tipo últimos 30 dias
+  // Docs por tipo
   const tipoCount={};
   (docsRecentes||[]).forEach(d=>{tipoCount[d.tipo]=(tipoCount[d.tipo]||0)+1;});
+
+  // CSAT médio
+  const csatNotas=(avaliacoesCsat||[]).map(a=>a.nota_csat).filter(Boolean);
+  const csatMedio=csatNotas.length>0?(csatNotas.reduce((a,b)=>a+b,0)/csatNotas.length).toFixed(1):null;
+
+  // NPS
+  const npsNotas=(avaliacoesNps||[]).map(a=>a.nota_nps).filter(n=>n!=null);
+  const npsScore=npsNotas.length>0?Math.round(
+    ((npsNotas.filter(n=>n>=9).length-npsNotas.filter(n=>n<=6).length)/npsNotas.length)*100
+  ):null;
+
+  // Taxa de ocupação — consultas realizadas / total agendadas (excl. bloqueados)
+  const totalAgendados=(agendamentos||[]).filter(a=>a.status!=="bloqueado").length;
+  const totalRealizadas=(agendamentos||[]).filter(a=>a.status==="realizada").length;
+  const taxaOcupacao=totalAgendados>0?Math.round((totalRealizadas/totalAgendados)*100):null;
 
   return{
     totalPacientes:totalPacientes||0,
     totalMedicos:totalMedicos||0,
     totalConsultas:totalConsultas||0,
     totalCheckins:totalCheckins||0,
-    totalPlanoAtivo:planoAtivo||0,
-    topCids,
-    tipoCount,
+    totalPlanoAtivo:totalPlanoAtivo||0,
+    topCids,tipoCount,
+    csatMedio,csatTotal:csatNotas.length,
+    npsScore,npsTotal:npsNotas.length,
+    noShowPaciente:noShowPaciente||0,
+    noShowMedico:noShowMedico||0,
+    cancelamentos:cancelamentos||0,
+    taxaOcupacao,
+    avaliacoesCsat:avaliacoesCsat||[],
   };
 }
 
@@ -79,12 +115,47 @@ async function carregarMedicosDetalhes(){
   const{data:medicos}=await supabase.from("medicos").select("id,nome,crm,especialidade,email");
   if(!medicos)return[];
   const resultados=await Promise.all(medicos.map(async m=>{
-    const[{count:pacientes},{count:consultas},{count:docs}]=await Promise.all([
+    const[
+      {count:pacientes},
+      {count:consultas},
+      {count:noShowPac},
+      {count:noShowMed},
+      {count:cancelamentos},
+      {data:csat},
+      {data:plano},
+      {data:regs},
+    ]=await Promise.all([
       supabase.from("pacientes").select("*",{count:"exact",head:true}).eq("medico_id",m.id),
       supabase.from("agendamentos").select("*",{count:"exact",head:true}).eq("medico_id",m.id).eq("status","realizada"),
-      supabase.from("documentos").select("*",{count:"exact",head:true}).eq("medico_id",m.id),
+      supabase.from("agendamentos").select("*",{count:"exact",head:true}).eq("medico_id",m.id).eq("status","nao_compareceu_paciente"),
+      supabase.from("agendamentos").select("*",{count:"exact",head:true}).eq("medico_id",m.id).eq("status","nao_compareceu_medico"),
+      supabase.from("agendamentos").select("*",{count:"exact",head:true}).eq("medico_id",m.id).eq("status","cancelado"),
+      supabase.from("avaliacoes").select("nota_csat").eq("medico_id",m.id).eq("tipo","csat"),
+      supabase.from("plano_cuidado").select("id,paciente_id,frequencia").eq("medico_id",m.id).eq("ativo",true),
+      supabase.from("plano_registros").select("paciente_id").gte("data",new Date(Date.now()-30*86400000).toISOString().slice(0,10)),
     ]);
-    return{...m,totalPacientes:pacientes||0,totalConsultas:consultas||0,totalDocs:docs||0};
+
+    // CSAT médio
+    const csatNotas=(csat||[]).map(a=>a.nota_csat).filter(Boolean);
+    const csatMedio=csatNotas.length>0?(csatNotas.reduce((a,b)=>a+b,0)/csatNotas.length).toFixed(1):null;
+
+    // Adesão ao plano — pacientes com registros / total com plano
+    const pacientesComPlano=new Set((plano||[]).map(p=>p.paciente_id));
+    const pacientesComRegistro=new Set((regs||[]).map(r=>r.paciente_id));
+    const adesao=pacientesComPlano.size>0?
+      Math.round([...pacientesComPlano].filter(id=>pacientesComRegistro.has(id)).length/pacientesComPlano.size*100):null;
+
+    return{
+      ...m,
+      totalPacientes:pacientes||0,
+      totalConsultas:consultas||0,
+      noShowPaciente:noShowPac||0,
+      noShowMedico:noShowMed||0,
+      cancelamentos:cancelamentos||0,
+      csatMedio,
+      csatTotal:csatNotas.length,
+      adesaoPlano:adesao,
+    };
   }));
   return resultados;
 }
@@ -196,7 +267,6 @@ export function AppAdmin({admin,apiKey,onLogout}){
     {id:"metricas",label:"Métricas",icon:"📊"},
     {id:"episodios",label:"Episódios Clínicos",icon:"🏥"},
     {id:"medicos",label:"Médicos",icon:"👨‍⚕️"},
-    {id:"empresas",label:"Empresas",icon:"🏢"},
     {id:"programas",label:"Programas",icon:"✨"},
   ];
 
@@ -239,7 +309,6 @@ export function AppAdmin({admin,apiKey,onLogout}){
         {tela==="metricas"&&<TelaMetricas/>}
         {tela==="episodios"&&<TelaEpisodios apiKey={apiKey}/>}
         {tela==="medicos"&&<TelaMedicos/>}
-        {tela==="empresas"&&<TelaEmpresas/>}
         {tela==="programas"&&<TelaProgramas/>}
       </div>
     </div>
@@ -268,28 +337,49 @@ function TelaMetricas(){
   const TIPO_LABEL={consulta:"Consultas",receita:"Prescrições",pedido_exame:"Pedidos de exame",atestado:"Atestados",estilo_vida:"Estilo de vida",relatorio:"Relatórios"};
   const TIPO_COR={consulta:T.blue,receita:T.green,pedido_exame:T.purple,atestado:T.orange,estilo_vida:T.green,relatorio:T.inkMid};
 
-  const kpis=[
-    {label:"Colaboradores",value:metricas.totalPacientes,icon:"👥",cor:T.blue},
-    {label:"Médicos ativos",value:metricas.totalMedicos,icon:"👨‍⚕️",cor:T.green},
-    {label:"Consultas realizadas",value:metricas.totalConsultas,icon:"🏥",cor:T.purple},
-    {label:"Check-ins (30d)",value:metricas.totalCheckins,icon:"📊",cor:T.orange},
-    {label:"Tarefas no plano",value:metricas.totalPlanoAtivo,icon:"📋",cor:T.green},
-  ];
-
   return(
     <div style={{padding:"28px",maxWidth:1100,margin:"0 auto"}}>
       <div style={{marginBottom:24}}>
-        <div style={{fontSize:22,fontWeight:600,color:T.ink}}>Visão geral da plataforma</div>
-        <div style={{fontSize:13,color:T.inkMid,marginTop:4}}>Dados consolidados de todos os tenants · atualizado agora</div>
+        <div style={{fontSize:22,fontWeight:600,color:T.ink}}>Visão geral · Stone</div>
+        <div style={{fontSize:13,color:T.inkMid,marginTop:4}}>Últimos 90 dias · atualizado agora</div>
       </div>
 
-      {/* KPIs */}
-      <div style={{display:"grid",gridTemplateColumns:"repeat(5,1fr)",gap:12,marginBottom:24}}>
-        {kpis.map(k=>(
-          <Card key={k.label} style={{padding:"18px 16px"}}>
-            <div style={{fontSize:22,marginBottom:8}}>{k.icon}</div>
-            <div style={{fontSize:26,fontWeight:700,color:k.cor,marginBottom:2}}>{k.value}</div>
-            <div style={{fontSize:11,color:T.inkFaint}}>{k.label}</div>
+      {/* KPIs linha 1 — Operacional */}
+      <div style={{fontSize:10,color:T.inkFaint,letterSpacing:"0.1em",marginBottom:8}}>OPERACIONAL</div>
+      <div style={{display:"grid",gridTemplateColumns:"repeat(6,1fr)",gap:10,marginBottom:20}}>
+        {[
+          {label:"Colaboradores",value:metricas.totalPacientes,icon:"👥",cor:T.blue},
+          {label:"Médicos",value:metricas.totalMedicos,icon:"👨‍⚕️",cor:T.green},
+          {label:"Consultas realizadas",value:metricas.totalConsultas,icon:"🏥",cor:T.purple},
+          {label:"Check-ins (30d)",value:metricas.totalCheckins,icon:"📊",cor:T.orange},
+          {label:"Taxa de ocupação",value:metricas.taxaOcupacao!=null?metricas.taxaOcupacao+"%":"—",icon:"📅",cor:metricas.taxaOcupacao>=80?T.green:metricas.taxaOcupacao>=60?T.orange:T.red},
+          {label:"Cancelamentos (90d)",value:metricas.cancelamentos,icon:"❌",cor:metricas.cancelamentos>10?T.red:T.inkMid},
+        ].map(k=>(
+          <Card key={k.label} style={{padding:"14px 12px"}}>
+            <div style={{fontSize:18,marginBottom:6}}>{k.icon}</div>
+            <div style={{fontSize:22,fontWeight:700,color:k.cor,marginBottom:2}}>{k.value}</div>
+            <div style={{fontSize:10,color:T.inkFaint,lineHeight:1.4}}>{k.label}</div>
+          </Card>
+        ))}
+      </div>
+
+      {/* KPIs linha 2 — No-show e Satisfação */}
+      <div style={{display:"grid",gridTemplateColumns:"repeat(4,1fr)",gap:10,marginBottom:24}}>
+        {[
+          {label:"No-show paciente",value:metricas.noShowPaciente,icon:"🚶",cor:metricas.noShowPaciente>5?T.red:T.orange,sub:"pacientes faltaram"},
+          {label:"No-show médico",value:metricas.noShowMedico,icon:"⚕️",cor:metricas.noShowMedico>2?T.red:T.orange,sub:"médicos faltaram"},
+          {label:"CSAT médio",value:metricas.csatMedio?metricas.csatMedio+"/5":"—",icon:"⭐",cor:metricas.csatMedio>=4?T.green:metricas.csatMedio>=3?T.orange:T.red,sub:metricas.csatTotal+" avaliações"},
+          {label:"NPS",value:metricas.npsScore!=null?metricas.npsScore:"—",icon:"💬",cor:metricas.npsScore>=50?T.green:metricas.npsScore>=0?T.orange:T.red,sub:metricas.npsTotal+" respondentes"},
+        ].map(k=>(
+          <Card key={k.label} style={{padding:"16px"}}>
+            <div style={{display:"flex",alignItems:"center",gap:10,marginBottom:8}}>
+              <span style={{fontSize:22}}>{k.icon}</span>
+              <div>
+                <div style={{fontSize:24,fontWeight:700,color:k.cor,lineHeight:1}}>{k.value}</div>
+                <div style={{fontSize:10,color:T.inkFaint,marginTop:2}}>{k.sub}</div>
+              </div>
+            </div>
+            <div style={{fontSize:11,color:T.inkMid}}>{k.label}</div>
           </Card>
         ))}
       </div>
@@ -355,20 +445,44 @@ function TelaMetricas(){
           <table style={{width:"100%",borderCollapse:"collapse"}}>
             <thead>
               <tr style={{background:T.bgWarm}}>
-                {["Médico","CRM","Especialidade","Pacientes","Consultas","Documentos"].map(h=>(
-                  <th key={h} style={{padding:"10px 16px",textAlign:"left",fontSize:11,color:T.inkFaint,fontWeight:500,letterSpacing:"0.05em"}}>{h}</th>
+                {["Médico","Pacientes","Consultas","No-show pac.","No-show méd.","Cancelamentos","CSAT","Adesão plano"].map(h=>(
+                  <th key={h} style={{padding:"10px 14px",textAlign:"left",fontSize:10,color:T.inkFaint,fontWeight:500,letterSpacing:"0.05em",whiteSpace:"nowrap"}}>{h}</th>
                 ))}
               </tr>
             </thead>
             <tbody>
               {medicos.map(m=>(
                 <tr key={m.id} style={{borderTop:`0.5px solid ${T.border}`}}>
-                  <td style={{padding:"12px 16px",fontSize:13,fontWeight:500,color:T.ink}}>{m.nome}</td>
-                  <td style={{padding:"12px 16px",fontSize:12,color:T.inkMid}}>{m.crm||"—"}</td>
-                  <td style={{padding:"12px 16px",fontSize:12,color:T.inkMid}}>{m.especialidade||"—"}</td>
-                  <td style={{padding:"12px 16px"}}><Badge label={m.totalPacientes} color={T.blue}/></td>
-                  <td style={{padding:"12px 16px"}}><Badge label={m.totalConsultas} color={T.green}/></td>
-                  <td style={{padding:"12px 16px"}}><Badge label={m.totalDocs} color={T.purple}/></td>
+                  <td style={{padding:"12px 14px"}}>
+                    <div style={{fontSize:13,fontWeight:500,color:T.ink}}>{m.nome}</div>
+                    <div style={{fontSize:11,color:T.inkFaint}}>{m.especialidade||"—"}</div>
+                  </td>
+                  <td style={{padding:"12px 14px"}}><Badge label={m.totalPacientes} color={T.blue}/></td>
+                  <td style={{padding:"12px 14px"}}><Badge label={m.totalConsultas} color={T.green}/></td>
+                  <td style={{padding:"12px 14px"}}>
+                    <Badge label={m.noShowPaciente} color={m.noShowPaciente>5?T.red:m.noShowPaciente>2?T.orange:T.inkMid}/>
+                  </td>
+                  <td style={{padding:"12px 14px"}}>
+                    <Badge label={m.noShowMedico} color={m.noShowMedico>2?T.red:m.noShowMedico>0?T.orange:T.green}/>
+                  </td>
+                  <td style={{padding:"12px 14px"}}>
+                    <Badge label={m.cancelamentos} color={m.cancelamentos>5?T.red:T.inkMid}/>
+                  </td>
+                  <td style={{padding:"12px 14px"}}>
+                    {m.csatMedio?(
+                      <span style={{fontSize:13,fontWeight:600,color:m.csatMedio>=4?T.green:m.csatMedio>=3?T.orange:T.red}}>
+                        ⭐ {m.csatMedio}
+                        <span style={{fontSize:10,color:T.inkFaint,fontWeight:400}}> ({m.csatTotal})</span>
+                      </span>
+                    ):<span style={{fontSize:12,color:T.inkFaint}}>—</span>}
+                  </td>
+                  <td style={{padding:"12px 14px"}}>
+                    {m.adesaoPlano!=null?(
+                      <span style={{fontSize:13,fontWeight:600,color:m.adesaoPlano>=70?T.green:m.adesaoPlano>=40?T.orange:T.red}}>
+                        {m.adesaoPlano}%
+                      </span>
+                    ):<span style={{fontSize:12,color:T.inkFaint}}>—</span>}
+                  </td>
                 </tr>
               ))}
             </tbody>
