@@ -543,7 +543,14 @@ function TelaEpisodios({apiKey}){
         <div style={{display:"flex",flexDirection:"column",gap:10}}>
           {episodios.map(ep=>(
             <Card key={ep.id} style={{padding:"0",overflow:"hidden",cursor:"pointer"}}
-              onClick={()=>{setSelecionado(ep);setTela("detalhe");}}>
+              onClick={async()=>{
+                // Recarregar com joins antes de abrir
+                const{data}=await supabase.from("episodios")
+                  .select("*, episodio_acoes(*), episodio_desfechos(*)")
+                  .eq("id",ep.id).single();
+                setSelecionado(data||ep);
+                setTela("detalhe");
+              }}>
               <div style={{padding:"16px 20px",display:"flex",alignItems:"center",gap:16}}>
                 <div style={{width:44,height:44,borderRadius:10,background:T.greenBg,display:"flex",alignItems:"center",justifyContent:"center",fontSize:22,flexShrink:0}}>
                   🏥
