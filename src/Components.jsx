@@ -161,8 +161,8 @@ async function carregarMedicosDetalhes(){
 }
 
 // ─── Componentes UI ────────────────────────────────────────────────
-const Card=({children,style={}})=>(
-  <div style={{background:T.surface,border:`0.5px solid ${T.border}`,borderRadius:12,boxShadow:T.shadow,...style}}>
+const Card=({children,style={},onClick,...props})=>(
+  <div onClick={onClick} style={{background:T.surface,border:`0.5px solid ${T.border}`,borderRadius:12,boxShadow:T.shadow,...style,...(onClick?{cursor:"pointer"}:{})}} {...props}>
     {children}
   </div>
 );
