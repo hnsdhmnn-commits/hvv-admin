@@ -614,17 +614,40 @@ function FormEpisodio({apiKey,onSalvo,onCancelar}){
         body:JSON.stringify({
           model:"claude-sonnet-4-20250514",
           max_tokens:1200,
-          messages:[{role:"user",content:"Voce e especialista em medicina baseada em evidencias e conjuntos ICHOM. Para a condicao: CID "+cidTxt+" / "+nomeTxt+" com duracao de "+duracao+" meses, sugira um protocolo de episodio clinico completo. Retorne SOMENTE um JSON com: {ichom_set, ichom_url, etapas:[{titulo, tipo (consulta|exame|medicamento|estilo_vida|questionario|desfecho_clinico|desfecho_pro), dia, responsavel (medico|paciente|ana), unidade, meta, frequencia_coleta, intermediario, ichom_ref, descricao}]}. dia = dia apos inicio (0=inicio, 30=1mes, 90=3meses etc). Para desfechos inclua unidade e meta. Para acoes inclua descricao curta. Retorne SOMENTE o JSON."}]
+          messages:[{role:"user",content:"Voce e especialista em medicina baseada em evidencias e ICHOM. Para a condicao: CID "+cidTxt+" / "+nomeTxt+" com duracao "+duracao+" meses, crie um protocolo clinico. Retorne SOMENTE JSON valido sem comentarios nem trailing commas. Formato exato: {\"ichom_set\":\"nome\",\"ichom_url\":\"url ou empty string\",\"etapas\":[{\"titulo\":\"texto\",\"tipo\":\"consulta\",\"dia\":0,\"responsavel\":\"medico\",\"descricao\":\"texto curto\",\"unidade\":\"\",\"meta\":\"\",\"intermediario\":true}]}. Tipos validos: consulta, exame, medicamento, estilo_vida, questionario, desfecho_clinico, desfecho_pro. Responsaveis: medico, paciente, ana, equipe. dia = inteiro (0=inicio 30=1mes 90=3meses 180=6meses 365=12meses). Inclua 8 a 15 etapas ordenadas por dia. Para desfechos preencha unidade e meta."}]
         })
       });
       const data=await res.json();
       const raw=(data.content?.[0]?.text||"{}").trim();
       const match=raw.match(/\{[\s\S]*\}/);
       if(match){
-        const parsed=JSON.parse(match[0]);
-        setSugestao(parsed);
-        // Pré-popular etapas com as sugestões
-        setEtapas((parsed.etapas||[]).map((e,i)=>({...e,id:"temp_"+i,incluir:true})));
+        try{
+          // Tentar parse direto
+          const parsed=JSON.parse(match[0]);
+          setSugestao(parsed);
+          setEtapas((parsed.etapas||[]).map((e,i)=>({...e,id:"temp_"+i,incluir:true})));
+        }catch(parseErr){
+          // Se falhar, tentar sanitizar — remover trailing commas e comentários
+          const sanitized=match[0]
+            .replace(/,\s*([}\]])/g,"$1") // trailing commas
+            .replace(/\/\/[^\n]*/g,"")     // comentários de linha
+            .replace(/\/\*[\s\S]*?\*\//g,""); // comentários de bloco
+          try{
+            const parsed=JSON.parse(sanitized);
+            setSugestao(parsed);
+            setEtapas((parsed.etapas||[]).map((e,i)=>({...e,id:"temp_"+i,incluir:true})));
+          }catch(e2){
+            console.warn("JSON inválido mesmo após sanitização:",e2.message);
+            // Tentar extrair ao menos as etapas como array
+            const etapasMatch=sanitized.match(/"etapas"\s*:\s*(\[[\s\S]*?\])/);
+            if(etapasMatch){
+              try{
+                const etapas=JSON.parse(etapasMatch[1].replace(/,\s*]/g,"]"));
+                setEtapas(etapas.map((e,i)=>({...e,id:"temp_"+i,incluir:true})));
+              }catch(e3){console.warn("Não foi possível extrair etapas:",e3.message);}
+            }
+          }
+        }
       }
     }catch(e){console.warn(e);}
     finally{setBuscando(false);}
