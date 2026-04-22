@@ -762,13 +762,11 @@ function FormEpisodio({apiKey,onSalvo,onCancelar}){
   );
 }
 
-// ─── Detalhe do Episódio ───────────────────────────────────────────
+// ─── Detalhe do Episódio — Timeline ─────────────────────────────
 function DetalheEpisodio({episodio,apiKey,onVoltar}){
   const[ep,setEp]=useState(episodio);
-  const[abaAtiva,setAbaAtiva]=useState("desfechos");
-  const[novaAcao,setNovaAcao]=useState(false);
-  const[novoDesfecho,setNovoDesfecho]=useState(false);
   const[publicando,setPublicando]=useState(false);
+  const[mostrarForm,setMostrarForm]=useState(false);
 
   const recarregar=async()=>{
     const{data}=await supabase.from("episodios")
@@ -784,12 +782,31 @@ function DetalheEpisodio({episodio,apiKey,onVoltar}){
     setPublicando(false);
   };
 
-  const FREQ_LABEL={diario:"Diário",n_vezes_semana:"N×/sem",uma_vez_semana:"1×/sem",uma_vez_mes:"1×/mês",
-    trimestral:"Trimestral",semestral:"Semestral",anual:"Anual",unico:"Único"};
+  const excluirAcao=async(id)=>{
+    await supabase.from("episodio_acoes").delete().eq("id",id);
+    recarregar();
+  };
+
+  const excluirDesfecho=async(id)=>{
+    await supabase.from("episodio_desfechos").delete().eq("id",id);
+    recarregar();
+  };
+
+  // Montar timeline unificada — ações + desfechos ordenados por dia
+  const timeline=[
+    ...(ep.episodio_acoes||[]).map(a=>({...a,_tipo:"acao"})),
+    ...(ep.episodio_desfechos||[]).map(d=>({...d,_tipo:"desfecho"})),
+  ].sort((a,b)=>(a.dia_inicio||a.mes_inicio*30||0)-(b.dia_inicio||b.mes_inicio*30||0));
+
+  const TIPO_COR={consulta:T.green,exame:T.purple,medicamento:T.blue,estilo_vida:T.orange,questionario:T.blue,outro:T.inkMid};
+  const TIPO_ICON={consulta:"🩺",exame:"🔬",medicamento:"💊",estilo_vida:"🌿",questionario:"📝",outro:"📋"};
+  const RESP_LABEL={medico:"Médico",paciente:"Paciente",ana:"Ana",equipe:"Equipe"};
 
   return(
-    <div style={{padding:"28px",maxWidth:900,margin:"0 auto"}}>
-      <div style={{display:"flex",alignItems:"flex-start",gap:12,marginBottom:20}}>
+    <div style={{padding:"28px",maxWidth:860,margin:"0 auto"}}>
+
+      {/* Header */}
+      <div style={{display:"flex",alignItems:"flex-start",gap:12,marginBottom:24}}>
         <button onClick={onVoltar} style={{background:"none",border:"none",cursor:"pointer",color:T.inkMid,fontSize:20,padding:"4px 0",flexShrink:0}}>←</button>
         <div style={{flex:1}}>
           <div style={{display:"flex",alignItems:"center",gap:10,marginBottom:4}}>
@@ -797,252 +814,286 @@ function DetalheEpisodio({episodio,apiKey,onVoltar}){
             <Badge label={ep.tipo==="institucional"?"Institucional":"Customizado"} color={ep.tipo==="institucional"?T.green:T.blue}/>
             <Badge label={ep.publicado?"Publicado":"Rascunho"} color={ep.publicado?T.green:T.orange}/>
           </div>
-          <div style={{fontSize:13,color:T.inkMid}}>
-            {ep.cid_principal&&<span style={{marginRight:16}}>CID: {ep.cid_principal}</span>}
-            <span style={{marginRight:16}}>{ep.duracao_meses} meses</span>
-            {ep.renovavel&&<span style={{marginRight:16}}>✓ Renovável</span>}
-            {ep.ichom_set&&<span>ICHOM: {ep.ichom_set}</span>}
+          <div style={{fontSize:13,color:T.inkMid,display:"flex",gap:16,flexWrap:"wrap"}}>
+            {ep.cid_principal&&<span>CID: <strong>{ep.cid_principal}</strong></span>}
+            <span>Duração: <strong>{ep.duracao_meses} meses</strong></span>
+            {ep.renovavel&&<span>✓ Renovável (doenças crônicas)</span>}
+            {ep.ichom_set&&<span>ICHOM: <strong>{ep.ichom_set}</strong></span>}
           </div>
+          {ep.descricao&&<div style={{fontSize:12,color:T.inkFaint,marginTop:4}}>{ep.descricao}</div>}
         </div>
         {!ep.publicado&&(
           <Btn onClick={publicar} disabled={publicando} style={{flexShrink:0}}>
-            {publicando?"Publicando...":"✓ Publicar episódio"}
+            {publicando?"Publicando...":"✓ Publicar"}
           </Btn>
         )}
       </div>
 
-      {/* Abas */}
-      <div style={{display:"flex",gap:0,borderBottom:`0.5px solid ${T.border}`,marginBottom:20}}>
+      {/* Resumo */}
+      <div style={{display:"grid",gridTemplateColumns:"repeat(4,1fr)",gap:10,marginBottom:20}}>
         {[
-          {id:"desfechos",label:`Desfechos (${ep.episodio_desfechos?.length||0})`},
-          {id:"acoes",label:`Ações mínimas (${ep.episodio_acoes?.length||0})`},
-        ].map(a=>(
-          <button key={a.id} onClick={()=>setAbaAtiva(a.id)}
-            style={{padding:"8px 18px",background:"none",border:"none",cursor:"pointer",fontFamily:T.f,fontSize:13,
-              borderBottom:`2px solid ${abaAtiva===a.id?T.green:"transparent"}`,
-              color:abaAtiva===a.id?T.green:T.inkMid,fontWeight:abaAtiva===a.id?500:400}}>
-            {a.label}
-          </button>
+          {label:"Etapas totais",value:timeline.length,icon:"📋"},
+          {label:"Ações clínicas",value:(ep.episodio_acoes||[]).length,icon:"🩺"},
+          {label:"Desfechos",value:(ep.episodio_desfechos||[]).length,icon:"🎯"},
+          {label:"Duração",value:ep.duracao_meses+"m",icon:"📅"},
+        ].map(s=>(
+          <div key={s.label} style={{padding:"12px 14px",background:T.bgWarm,borderRadius:10,display:"flex",alignItems:"center",gap:10}}>
+            <span style={{fontSize:20}}>{s.icon}</span>
+            <div>
+              <div style={{fontSize:18,fontWeight:700,color:T.ink}}>{s.value}</div>
+              <div style={{fontSize:10,color:T.inkFaint}}>{s.label}</div>
+            </div>
+          </div>
         ))}
       </div>
 
-      {/* Desfechos */}
-      {abaAtiva==="desfechos"&&(
-        <div>
-          <div style={{display:"flex",justifyContent:"space-between",alignItems:"center",marginBottom:12}}>
-            <div style={{fontSize:13,color:T.inkMid}}>Desfechos clínicos e PROs monitorados neste episódio</div>
-            <Btn small onClick={()=>setNovoDesfecho(true)}>+ Adicionar desfecho</Btn>
-          </div>
+      {/* Timeline */}
+      <div style={{display:"flex",justifyContent:"space-between",alignItems:"center",marginBottom:16}}>
+        <div style={{fontSize:14,fontWeight:500,color:T.ink}}>Linha do tempo do episódio</div>
+        <Btn small onClick={()=>setMostrarForm(true)}>+ Adicionar etapa</Btn>
+      </div>
 
-          {(ep.episodio_desfechos||[]).length===0?(
-            <Card style={{padding:"32px",textAlign:"center",color:T.inkFaint}}>
-              <div style={{fontSize:24,marginBottom:8}}>🎯</div>
-              <div>Nenhum desfecho cadastrado ainda</div>
-            </Card>
-          ):(
-            <div style={{display:"flex",flexDirection:"column",gap:8}}>
-              {(ep.episodio_desfechos||[]).sort((a,b)=>a.ordem-b.ordem).map(d=>(
-                <Card key={d.id} style={{padding:"14px 18px",borderLeft:`3px solid ${d.tipo==="pro"?T.purple:T.green}`}}>
-                  <div style={{display:"flex",alignItems:"flex-start",gap:12}}>
-                    <div style={{flex:1}}>
-                      <div style={{display:"flex",alignItems:"center",gap:8,marginBottom:4}}>
-                        <div style={{fontSize:13,fontWeight:500,color:T.ink}}>{d.nome}</div>
-                        <Badge label={d.tipo==="pro"?"PRO":"Clínico"} color={d.tipo==="pro"?T.purple:T.green}/>
-                        {!d.intermediario&&<Badge label="Desfecho final" color={T.orange}/>}
-                      </div>
-                      <div style={{display:"flex",gap:8,flexWrap:"wrap"}}>
-                        {d.unidade&&<span style={{fontSize:11,color:T.inkMid}}>Unidade: {d.unidade}</span>}
-                        {d.valor_meta&&<span style={{fontSize:11,color:T.inkMid}}>Meta: {d.valor_meta}</span>}
-                        <Badge label={FREQ_LABEL[d.frequencia_coleta]||d.frequencia_coleta} color={T.blue} bg={T.blueBg}/>
-                        <Badge label={d.momento||"durante"} color={T.inkMid}/>
-                      </div>
-                      {d.ichom_referencia&&<div style={{fontSize:10,color:T.inkFaint,marginTop:4}}>{d.ichom_referencia}</div>}
+      {timeline.length===0?(
+        <Card style={{padding:"48px",textAlign:"center"}}>
+          <div style={{fontSize:36,marginBottom:12}}>📋</div>
+          <div style={{fontSize:15,fontWeight:500,color:T.ink,marginBottom:8}}>Nenhuma etapa cadastrada</div>
+          <div style={{fontSize:13,color:T.inkMid,marginBottom:20}}>Adicione ações e desfechos para montar a jornada do paciente</div>
+          <Btn onClick={()=>setMostrarForm(true)}>+ Adicionar primeira etapa</Btn>
+        </Card>
+      ):(
+        <div style={{position:"relative"}}>
+          {/* Linha vertical da timeline */}
+          <div style={{position:"absolute",left:28,top:0,bottom:0,width:2,background:T.border,zIndex:0}}/>
+
+          <div style={{display:"flex",flexDirection:"column",gap:0}}>
+            {timeline.map((item,idx)=>{
+              const isDesfecho=item._tipo==="desfecho";
+              const cor=isDesfecho?(item.tipo==="pro"?T.purple:T.blue):TIPO_COR[item.tipo]||T.inkMid;
+              const icon=isDesfecho?(item.tipo==="pro"?"📊":"🎯"):TIPO_ICON[item.tipo]||"📋";
+              const dia=item.dia_inicio||(item.mes_inicio?item.mes_inicio*30:null);
+              const FREQ={diario:"Diário",n_vezes_semana:"N×/sem",uma_vez_semana:"1×/sem",uma_vez_mes:"1×/mês",trimestral:"Trimestral",semestral:"Semestral",anual:"Anual",unico:"Único",mensal:"Mensal",bimestral:"Bimestral",por_consulta:"Por consulta",unico_inicio:"Início",unico_fim:"Fim"};
+
+              return(
+                <div key={item.id} style={{display:"flex",gap:16,marginBottom:12,position:"relative",zIndex:1}}>
+                  {/* Ponto na timeline */}
+                  <div style={{width:58,flexShrink:0,display:"flex",flexDirection:"column",alignItems:"center",gap:4}}>
+                    <div style={{width:40,height:40,borderRadius:"50%",background:cor+"20",border:`2px solid ${cor}`,
+                      display:"flex",alignItems:"center",justifyContent:"center",fontSize:18,background:T.surface}}>
+                      {icon}
                     </div>
-                    <button onClick={async()=>{await supabase.from("episodio_desfechos").delete().eq("id",d.id);recarregar();}}
-                      style={{background:"none",border:"none",cursor:"pointer",color:T.red,fontSize:16,padding:"0 4px",flexShrink:0}}>×</button>
+                    {dia!=null&&(
+                      <div style={{fontSize:9,color:T.inkFaint,textAlign:"center",lineHeight:1.3}}>
+                        {dia===0?"Início":dia<30?"Dia "+dia:dia%30===0?"Mês "+(dia/30):"Dia "+dia}
+                      </div>
+                    )}
                   </div>
-                </Card>
-              ))}
-            </div>
-          )}
 
-          {novoDesfecho&&(
-            <FormDesfecho episodioId={ep.id} apiKey={apiKey}
-              onSalvo={()=>{recarregar();setNovoDesfecho(false);}}
-              onCancelar={()=>setNovoDesfecho(false)}/>
-          )}
+                  {/* Card da etapa */}
+                  <Card style={{flex:1,padding:"14px 16px",borderLeft:`3px solid ${cor}`}}>
+                    <div style={{display:"flex",alignItems:"flex-start",gap:10}}>
+                      <div style={{flex:1}}>
+                        <div style={{display:"flex",alignItems:"center",gap:8,marginBottom:4,flexWrap:"wrap"}}>
+                          <div style={{fontSize:13,fontWeight:500,color:T.ink}}>{item.titulo||item.nome}</div>
+                          {isDesfecho&&<Badge label={item.tipo==="pro"?"PRO":"Clínico"} color={cor}/>}
+                          {!isDesfecho&&<Badge label={item.tipo} color={cor}/>}
+                          {isDesfecho&&!item.intermediario&&<Badge label="Desfecho final" color={T.orange}/>}
+                          <Badge label="Obrigatório" color={T.inkLight}/>
+                        </div>
+                        {item.descricao&&<div style={{fontSize:12,color:T.inkMid,marginBottom:4}}>{item.descricao}</div>}
+                        <div style={{display:"flex",gap:8,flexWrap:"wrap"}}>
+                          {!isDesfecho&&item.frequencia&&<Badge label={FREQ[item.frequencia]||item.frequencia} color={T.inkLight}/>}
+                          {!isDesfecho&&item.responsavel&&<Badge label={RESP_LABEL[item.responsavel]||item.responsavel} color={T.blue} bg={T.blueBg}/>}
+                          {isDesfecho&&item.unidade&&<span style={{fontSize:11,color:T.inkMid}}>Unidade: {item.unidade}</span>}
+                          {isDesfecho&&item.valor_meta&&<span style={{fontSize:11,color:T.inkMid}}>Meta: {item.valor_meta}</span>}
+                          {isDesfecho&&item.frequencia_coleta&&<Badge label={FREQ[item.frequencia_coleta]||item.frequencia_coleta} color={T.inkLight}/>}
+                          {isDesfecho&&item.ichom_referencia&&<span style={{fontSize:10,color:T.inkFaint}}>{item.ichom_referencia}</span>}
+                        </div>
+                      </div>
+                      <button
+                        onClick={()=>isDesfecho?excluirDesfecho(item.id):excluirAcao(item.id)}
+                        style={{background:"none",border:"none",cursor:"pointer",color:T.red,fontSize:16,padding:"0 4px",flexShrink:0,opacity:0.5}}
+                        onMouseOver={e=>e.currentTarget.style.opacity=1}
+                        onMouseOut={e=>e.currentTarget.style.opacity=0.5}>
+                        ×
+                      </button>
+                    </div>
+                  </Card>
+                </div>
+              );
+            })}
+          </div>
         </div>
       )}
 
-      {/* Ações mínimas */}
-      {abaAtiva==="acoes"&&(
-        <div>
-          <div style={{display:"flex",justifyContent:"space-between",alignItems:"center",marginBottom:12}}>
-            <div style={{fontSize:13,color:T.inkMid}}>Ações obrigatórias que entram automaticamente no plano de cuidado</div>
-            <Btn small onClick={()=>setNovaAcao(true)}>+ Adicionar ação</Btn>
-          </div>
-
-          {(ep.episodio_acoes||[]).length===0?(
-            <Card style={{padding:"32px",textAlign:"center",color:T.inkFaint}}>
-              <div style={{fontSize:24,marginBottom:8}}>📋</div>
-              <div>Nenhuma ação cadastrada ainda</div>
-            </Card>
-          ):(
-            <div style={{display:"flex",flexDirection:"column",gap:8}}>
-              {(ep.episodio_acoes||[]).sort((a,b)=>a.ordem-b.ordem).map(a=>(
-                <Card key={a.id} style={{padding:"14px 18px"}}>
-                  <div style={{display:"flex",alignItems:"center",gap:12}}>
-                    <div style={{flex:1}}>
-                      <div style={{fontSize:13,fontWeight:500,color:T.ink,marginBottom:3}}>{a.titulo}</div>
-                      <div style={{display:"flex",gap:8}}>
-                        <Badge label={a.tipo} color={T.blue} bg={T.blueBg}/>
-                        <Badge label={FREQ_LABEL[a.frequencia]||a.frequencia} color={T.green}/>
-                        {a.obrigatorio&&<Badge label="Obrigatório" color={T.orange}/>}
-                        {(a.mes_inicio||a.mes_fim)&&(
-                          <Badge label={"Mês "+(a.mes_inicio||1)+" a "+(a.mes_fim||ep.duracao_meses)} color={T.inkMid}/>
-                        )}
-                      </div>
-                    </div>
-                    <button onClick={async()=>{await supabase.from("episodio_acoes").delete().eq("id",a.id);recarregar();}}
-                      style={{background:"none",border:"none",cursor:"pointer",color:T.red,fontSize:16}}>×</button>
-                  </div>
-                </Card>
-              ))}
-            </div>
-          )}
-
-          {novaAcao&&(
-            <FormAcao episodioId={ep.id} duracaoMeses={ep.duracao_meses}
-              onSalvo={()=>{recarregar();setNovaAcao(false);}}
-              onCancelar={()=>setNovaAcao(false)}/>
-          )}
-        </div>
+      {/* Form de nova etapa */}
+      {mostrarForm&&(
+        <FormEtapa
+          episodioId={ep.id}
+          duracaoMeses={ep.duracao_meses}
+          apiKey={apiKey}
+          onSalvo={()=>{recarregar();setMostrarForm(false);}}
+          onCancelar={()=>setMostrarForm(false)}/>
       )}
     </div>
   );
 }
 
-// ─── Form Desfecho ─────────────────────────────────────────────────
-function FormDesfecho({episodioId,apiKey,onSalvo,onCancelar}){
+// ─── Form Etapa — ação OU desfecho ────────────────────────────────
+function FormEtapa({episodioId,duracaoMeses,apiKey,onSalvo,onCancelar}){
+  const[tipoEtapa,setTipoEtapa]=useState("acao"); // acao | desfecho
+  const[salvando,setSalvando]=useState(false);
+
+  // Campos ação
+  const[titulo,setTitulo]=useState("");
+  const[tipo,setTipo]=useState("consulta");
+  const[freq,setFreq]=useState("unico");
+  const[responsavel,setResponsavel]=useState("medico");
+  const[diaInicio,setDiaInicio]=useState("0");
+  const[descricao,setDescricao]=useState("");
+
+  // Campos desfecho
   const[nome,setNome]=useState("");
-  const[tipo,setTipo]=useState("clinico");
+  const[tipoDesfecho,setTipoDesfecho]=useState("clinico");
   const[unidade,setUnidade]=useState("");
   const[meta,setMeta]=useState("");
-  const[freq,setFreq]=useState("trimestral");
+  const[freqColeta,setFreqColeta]=useState("trimestral");
   const[momento,setMomento]=useState("durante");
   const[intermediario,setIntermediario]=useState(true);
   const[ichom,setIchom]=useState("");
-  const[salvando,setSalvando]=useState(false);
+  const[diaDesfecho,setDiaDesfecho]=useState("");
+
+  const diasPreset=[
+    {label:"Início (Dia 0)",value:"0"},
+    {label:"Dia 7",value:"7"},
+    {label:"Dia 15",value:"15"},
+    {label:"Dia 30 (1 mês)",value:"30"},
+    {label:"Dia 60 (2 meses)",value:"60"},
+    {label:"Dia 90 (3 meses)",value:"90"},
+    {label:"Dia 180 (6 meses)",value:"180"},
+    {label:"Dia 270 (9 meses)",value:"270"},
+    {label:"Dia 365 (12 meses)",value:"365"},
+  ].filter(d=>Number(d.value)<=duracaoMeses*30);
 
   const salvar=async()=>{
-    if(!nome.trim())return;
     setSalvando(true);
-    await supabase.from("episodio_desfechos").insert({
-      episodio_id:episodioId,
-      nome:nome.trim(),
-      tipo,
-      unidade:unidade||null,
-      valor_meta:meta?Number(meta):null,
-      frequencia_coleta:freq,
-      momento,
-      intermediario,
-      ichom_referencia:ichom||null,
-    });
+    if(tipoEtapa==="acao"){
+      if(!titulo.trim()){setSalvando(false);return;}
+      await supabase.from("episodio_acoes").insert({
+        episodio_id:episodioId,
+        titulo:titulo.trim(),
+        descricao:descricao||null,
+        tipo,
+        frequencia:freq,
+        responsavel,
+        dia_inicio:Number(diaInicio)||0,
+        obrigatorio:true,
+      });
+    } else {
+      if(!nome.trim()){setSalvando(false);return;}
+      await supabase.from("episodio_desfechos").insert({
+        episodio_id:episodioId,
+        nome:nome.trim(),
+        tipo:tipoDesfecho,
+        unidade:unidade||null,
+        valor_meta:meta?Number(meta):null,
+        frequencia_coleta:freqColeta,
+        momento,
+        intermediario,
+        ichom_referencia:ichom||null,
+        dia_inicio:Number(diaDesfecho)||null,
+      });
+    }
     setSalvando(false);
     onSalvo();
   };
 
   return(
-    <Card style={{padding:"20px",marginTop:12,border:`1px solid ${T.greenBorder}`,background:T.greenBg}}>
-      <div style={{fontSize:14,fontWeight:500,color:T.ink,marginBottom:14}}>Novo desfecho</div>
-      <div style={{display:"grid",gridTemplateColumns:"2fr 1fr",gap:12}}>
-        <Input label="NOME DO DESFECHO" value={nome} onChange={setNome} placeholder="Ex: Pressão arterial sistólica" required/>
-        <Select label="TIPO" value={tipo} onChange={setTipo} options={[{value:"clinico",label:"Clínico"},{value:"pro",label:"PRO (relatado pelo paciente)"}]}/>
+    <Card style={{padding:"20px",marginTop:16,border:`1px solid ${T.greenBorder}`,background:T.greenBg}}>
+      <div style={{fontSize:14,fontWeight:500,color:T.ink,marginBottom:16}}>Nova etapa</div>
+
+      {/* Tipo de etapa */}
+      <div style={{display:"flex",gap:8,marginBottom:16}}>
+        {[
+          {id:"acao",label:"🩺 Ação clínica",desc:"consulta, exame, medicamento, orientação"},
+          {id:"desfecho",label:"🎯 Desfecho",desc:"clínico ou PRO — medição de resultado"},
+        ].map(t=>(
+          <button key={t.id} onClick={()=>setTipoEtapa(t.id)}
+            style={{flex:1,padding:"12px 14px",borderRadius:10,border:`1.5px solid ${tipoEtapa===t.id?T.green:T.border}`,
+              background:tipoEtapa===t.id?T.surface:"transparent",cursor:"pointer",textAlign:"left",fontFamily:T.f}}>
+            <div style={{fontSize:13,fontWeight:500,color:tipoEtapa===t.id?T.green:T.inkMid}}>{t.label}</div>
+            <div style={{fontSize:11,color:T.inkFaint,marginTop:2}}>{t.desc}</div>
+          </button>
+        ))}
       </div>
-      <div style={{display:"grid",gridTemplateColumns:"1fr 1fr 1fr 1fr",gap:12}}>
-        <Input label="UNIDADE" value={unidade} onChange={setUnidade} placeholder="mmHg"/>
-        <Input label="META" value={meta} onChange={setMeta} placeholder="130"/>
-        <Select label="FREQUÊNCIA" value={freq} onChange={setFreq} options={[
-          {value:"mensal",label:"Mensal"},{value:"bimestral",label:"Bimestral"},
-          {value:"trimestral",label:"Trimestral"},{value:"semestral",label:"Semestral"},
-          {value:"anual",label:"Anual"},{value:"por_consulta",label:"Por consulta"},
-          {value:"unico_inicio",label:"Único — início"},{value:"unico_fim",label:"Único — fim"},
-        ]}/>
-        <Select label="MOMENTO" value={momento} onChange={setMomento} options={[
-          {value:"inicio",label:"Início"},{value:"durante",label:"Durante"},
-          {value:"fim",label:"Fim"},{value:"inicio_e_fim",label:"Início e fim"},
-        ]}/>
-      </div>
-      <div style={{display:"grid",gridTemplateColumns:"2fr 1fr",gap:12}}>
-        <Input label="REFERÊNCIA ICHOM" value={ichom} onChange={setIchom} placeholder="Ex: ICHOM HF v2.0 — Outcome 3"/>
-        <Select label="TIPO DE DESFECHO" value={intermediario?"inter":"final"} onChange={v=>setIntermediario(v==="inter")}
-          options={[{value:"inter",label:"Intermediário"},{value:"final",label:"Final do episódio"}]}/>
-      </div>
-      <div style={{display:"flex",gap:10,justifyContent:"flex-end"}}>
+
+      {tipoEtapa==="acao"&&(
+        <>
+          <Input label="TÍTULO DA AÇÃO" value={titulo} onChange={setTitulo} placeholder="Ex: Consulta inicial com médico" required/>
+          <Input label="DESCRIÇÃO (opcional)" value={descricao} onChange={setDescricao} placeholder="Detalhes sobre esta etapa..."/>
+          <div style={{display:"grid",gridTemplateColumns:"1fr 1fr 1fr 1fr",gap:12}}>
+            <Select label="TIPO" value={tipo} onChange={setTipo} options={[
+              {value:"consulta",label:"🩺 Consulta"},
+              {value:"exame",label:"🔬 Exame"},
+              {value:"medicamento",label:"💊 Medicamento"},
+              {value:"estilo_vida",label:"🌿 Estilo de vida"},
+              {value:"questionario",label:"📝 Questionário"},
+              {value:"outro",label:"📋 Outro"},
+            ]}/>
+            <Select label="RESPONSÁVEL" value={responsavel} onChange={setResponsavel} options={[
+              {value:"medico",label:"Médico"},
+              {value:"paciente",label:"Paciente"},
+              {value:"ana",label:"Ana"},
+              {value:"equipe",label:"Equipe"},
+            ]}/>
+            <Select label="FREQUÊNCIA" value={freq} onChange={setFreq} options={[
+              {value:"unico",label:"Único"},
+              {value:"diario",label:"Diário"},
+              {value:"n_vezes_semana",label:"N×/semana"},
+              {value:"uma_vez_semana",label:"1×/semana"},
+              {value:"uma_vez_mes",label:"1×/mês"},
+              {value:"trimestral",label:"Trimestral"},
+              {value:"semestral",label:"Semestral"},
+            ]}/>
+            <Select label="QUANDO (DIA)" value={diaInicio} onChange={setDiaInicio} options={diasPreset}/>
+          </div>
+        </>
+      )}
+
+      {tipoEtapa==="desfecho"&&(
+        <>
+          <Input label="NOME DO DESFECHO" value={nome} onChange={setNome} placeholder="Ex: Hemoglobina glicada (HbA1c)" required/>
+          <div style={{display:"grid",gridTemplateColumns:"1fr 1fr 1fr 1fr",gap:12}}>
+            <Select label="TIPO" value={tipoDesfecho} onChange={setTipoDesfecho} options={[
+              {value:"clinico",label:"Clínico (médico mede)"},
+              {value:"pro",label:"PRO (paciente responde)"},
+            ]}/>
+            <Input label="UNIDADE" value={unidade} onChange={setUnidade} placeholder="%, mmHg, kg..."/>
+            <Input label="META" value={meta} onChange={setMeta} placeholder="Ex: 7"/>
+            <Select label="QUANDO (DIA)" value={diaDesfecho} onChange={setDiaDesfecho}
+              options={[{value:"",label:"Selecionar..."},...diasPreset]}/>
+          </div>
+          <div style={{display:"grid",gridTemplateColumns:"1fr 1fr 1fr",gap:12}}>
+            <Select label="FREQUÊNCIA DE COLETA" value={freqColeta} onChange={setFreqColeta} options={[
+              {value:"por_consulta",label:"A cada consulta"},
+              {value:"mensal",label:"Mensal"},
+              {value:"bimestral",label:"Bimestral"},
+              {value:"trimestral",label:"Trimestral"},
+              {value:"semestral",label:"Semestral"},
+              {value:"anual",label:"Anual"},
+              {value:"unico_inicio",label:"Único — início"},
+              {value:"unico_fim",label:"Único — fim"},
+            ]}/>
+            <Select label="TIPO DE DESFECHO" value={intermediario?"inter":"final"} onChange={v=>setIntermediario(v==="inter")}
+              options={[{value:"inter",label:"Intermediário"},{value:"final",label:"Final do episódio"}]}/>
+            <Input label="REFERÊNCIA ICHOM" value={ichom} onChange={setIchom} placeholder="Ex: ICHOM Diabetes v2.0"/>
+          </div>
+        </>
+      )}
+
+      <div style={{display:"flex",gap:10,justifyContent:"flex-end",marginTop:4}}>
         <Btn onClick={onCancelar} variant="outline" small>Cancelar</Btn>
-        <Btn onClick={salvar} disabled={salvando||!nome.trim()} small>
-          {salvando?"Salvando...":"Adicionar desfecho"}
-        </Btn>
-      </div>
-    </Card>
-  );
-}
-
-// ─── Form Ação ─────────────────────────────────────────────────────
-function FormAcao({episodioId,duracaoMeses,onSalvo,onCancelar}){
-  const[titulo,setTitulo]=useState("");
-  const[tipo,setTipo]=useState("consulta");
-  const[freq,setFreq]=useState("uma_vez_mes");
-  const[metaSemanal,setMetaSemanal]=useState("1");
-  const[obrigatorio,setObrigatorio]=useState(true);
-  const[mesInicio,setMesInicio]=useState("1");
-  const[mesFim,setMesFim]=useState(String(duracaoMeses));
-  const[salvando,setSalvando]=useState(false);
-
-  const salvar=async()=>{
-    if(!titulo.trim())return;
-    setSalvando(true);
-    await supabase.from("episodio_acoes").insert({
-      episodio_id:episodioId,
-      titulo:titulo.trim(),
-      tipo,
-      frequencia:freq,
-      meta_semanal:freq==="n_vezes_semana"?Number(metaSemanal):null,
-      obrigatorio,
-      mes_inicio:Number(mesInicio)||null,
-      mes_fim:Number(mesFim)||null,
-    });
-    setSalvando(false);
-    onSalvo();
-  };
-
-  return(
-    <Card style={{padding:"20px",marginTop:12,border:`1px solid ${T.border}`,background:T.bgWarm}}>
-      <div style={{fontSize:14,fontWeight:500,color:T.ink,marginBottom:14}}>Nova ação mínima</div>
-      <Input label="TÍTULO DA AÇÃO" value={titulo} onChange={setTitulo} placeholder="Ex: Consulta de acompanhamento" required/>
-      <div style={{display:"grid",gridTemplateColumns:"1fr 1fr 1fr",gap:12}}>
-        <Select label="TIPO" value={tipo} onChange={setTipo} options={[
-          {value:"consulta",label:"Consulta"},{value:"exame",label:"Exame"},
-          {value:"medicamento",label:"Medicamento"},{value:"estilo_vida",label:"Estilo de vida"},
-          {value:"questionario",label:"Questionário"},{value:"outro",label:"Outro"},
-        ]}/>
-        <Select label="FREQUÊNCIA" value={freq} onChange={setFreq} options={[
-          {value:"diario",label:"Diário"},{value:"n_vezes_semana",label:"N×/semana"},
-          {value:"uma_vez_semana",label:"1×/semana"},{value:"uma_vez_mes",label:"1×/mês"},
-          {value:"trimestral",label:"Trimestral"},{value:"semestral",label:"Semestral"},
-          {value:"anual",label:"Anual"},{value:"unico",label:"Único"},
-        ]}/>
-        <Select label="OBRIGATÓRIO" value={obrigatorio?"sim":"nao"} onChange={v=>setObrigatorio(v==="sim")}
-          options={[{value:"sim",label:"Sim"},{value:"nao",label:"Não"}]}/>
-      </div>
-      <div style={{display:"grid",gridTemplateColumns:"1fr 1fr",gap:12}}>
-        <Input label="MÊS INÍCIO" value={mesInicio} onChange={setMesInicio} type="number" placeholder="1"/>
-        <Input label="MÊS FIM" value={mesFim} onChange={setMesFim} type="number" placeholder={String(duracaoMeses)}/>
-      </div>
-      <div style={{display:"flex",gap:10,justifyContent:"flex-end"}}>
-        <Btn onClick={onCancelar} variant="outline" small>Cancelar</Btn>
-        <Btn onClick={salvar} disabled={salvando||!titulo.trim()} small>
-          {salvando?"Salvando...":"Adicionar ação"}
+        <Btn onClick={salvar} disabled={salvando||(tipoEtapa==="acao"?!titulo.trim():!nome.trim())} small>
+          {salvando?"Salvando...":"✓ Adicionar à timeline"}
         </Btn>
       </div>
     </Card>
