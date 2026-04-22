@@ -23,6 +23,69 @@ const T={
 const dataHoje=()=>new Date().toISOString().slice(0,10);
 
 // ─── Banco de dados ────────────────────────────────────────────────
+async function criarNovaVersao(ep){
+  // Copia o episódio como rascunho nova versão
+  const versaoAtual=ep.versao||1;
+  const{data:novo,error}=await supabase.from("episodios").insert({
+    nome:ep.nome,
+    descricao:ep.descricao,
+    cid_principal:ep.cid_principal,
+    cids_relacionados:ep.cids_relacionados,
+    tipo:ep.tipo,
+    empresa_id:ep.empresa_id,
+    medico_id:ep.medico_id,
+    duracao_meses:ep.duracao_meses,
+    renovavel:ep.renovavel,
+    ichom_set:ep.ichom_set,
+    ichom_url:ep.ichom_url,
+    publicado:false,
+    ativo:true,
+    versao:versaoAtual+1,
+    episodio_pai_id:ep.id,
+  }).select("id").single();
+  if(error||!novo)return null;
+
+  // Copiar ações
+  const acoes=(ep.episodio_acoes||[]).map(a=>({
+    episodio_id:novo.id,titulo:a.titulo,descricao:a.descricao,tipo:a.tipo,
+    frequencia:a.frequencia,responsavel:a.responsavel,dia_inicio:a.dia_inicio,
+    obrigatorio:a.obrigatorio,ordem:a.ordem,
+  }));
+  if(acoes.length>0)await supabase.from("episodio_acoes").insert(acoes);
+
+  // Copiar desfechos
+  const desfechos=(ep.episodio_desfechos||[]).map(d=>({
+    episodio_id:novo.id,nome:d.nome,descricao:d.descricao,tipo:d.tipo,
+    unidade:d.unidade,valor_meta:d.valor_meta,frequencia_coleta:d.frequencia_coleta,
+    momento:d.momento,ichom_referencia:d.ichom_referencia,intermediario:d.intermediario,
+    dia_inicio:d.dia_inicio,ordem:d.ordem,
+  }));
+  if(desfechos.length>0)await supabase.from("episodio_desfechos").insert(desfechos);
+
+  return novo.id;
+}
+
+async function publicarNovaVersao(novoId,velhoId){
+  // 1. Migrar pacientes do episódio antigo para o novo
+  await supabase.from("paciente_episodios")
+    .update({episodio_id:novoId,updated_at:new Date().toISOString()})
+    .eq("episodio_id",velhoId)
+    .eq("status","ativo");
+
+  // 2. Publicar novo
+  await supabase.from("episodios").update({publicado:true,ativo:true}).eq("id",novoId);
+
+  // 3. Arquivar antigo
+  await supabase.from("episodios").update({publicado:false,ativo:false}).eq("id",velhoId);
+}
+
+async function deletarEpisodio(id){
+  // Deletar em cascata — acoes e desfechos primeiro
+  await supabase.from("episodio_acoes").delete().eq("episodio_id",id);
+  await supabase.from("episodio_desfechos").delete().eq("episodio_id",id);
+  await supabase.from("episodios").delete().eq("id",id);
+}
+
 async function carregarEpisodios(){
   const{data}=await supabase.from("episodios")
     .select("*, episodio_acoes(*), episodio_desfechos(*)")
@@ -558,11 +621,14 @@ function TelaEpisodios({apiKey}){
                   🏥
                 </div>
                 <div style={{flex:1}}>
-                  <div style={{display:"flex",alignItems:"center",gap:8,marginBottom:4}}>
+                  <div style={{display:"flex",alignItems:"center",gap:8,marginBottom:4,flexWrap:"wrap"}}>
                     <div style={{fontSize:15,fontWeight:500,color:T.ink}}>{ep.nome}</div>
                     <Badge label={ep.tipo==="institucional"?"Institucional":"Customizado"}
                       color={ep.tipo==="institucional"?T.green:T.blue}/>
-                    {!ep.publicado&&<Badge label="Rascunho" color={T.orange}/>}
+                    {!ep.publicado&&!ep.episodio_pai_id&&<Badge label="Rascunho" color={T.orange}/>}
+                    {!ep.publicado&&ep.episodio_pai_id&&<Badge label="Nova versão — aguardando publicação" color={T.orange}/>}
+                    {ep.publicado&&ep.tem_versao_pendente&&<Badge label="Nova versão em revisão" color={T.blue}/>}
+                    {ep.versao&&ep.versao>1&&<Badge label={"v"+ep.versao} color={T.inkLight}/>}
                   </div>
                   <div style={{fontSize:12,color:T.inkMid}}>
                     {ep.cid_principal&&<span style={{marginRight:12}}>CID: {ep.cid_principal}</span>}
@@ -571,7 +637,20 @@ function TelaEpisodios({apiKey}){
                     <span>{ep.episodio_acoes?.length||0} ações · {ep.episodio_desfechos?.length||0} desfechos</span>
                   </div>
                 </div>
-                <div style={{fontSize:12,color:T.inkFaint}}>→</div>
+                <div style={{display:"flex",gap:8,alignItems:"center"}}>
+                  <div style={{fontSize:12,color:T.inkFaint}}>→</div>
+                  <button onClick={async e=>{
+                    e.stopPropagation();
+                    if(window.confirm("Deletar o episódio "+ep.nome+"? Esta ação não pode ser desfeita.")){{
+                      await deletarEpisodio(ep.id);
+                      recarregar();
+                    }}
+                  }} style={{background:"none",border:"none",cursor:"pointer",color:T.red,fontSize:14,opacity:0.4,padding:"4px"}}
+                  onMouseOver={e=>e.currentTarget.style.opacity=1}
+                  onMouseOut={e=>e.currentTarget.style.opacity=0.4}>
+                    🗑
+                  </button>
+                </div>
               </div>
             </Card>
           ))}
@@ -675,6 +754,8 @@ function FormEpisodio({apiKey,onSalvo,onCancelar}){
         ichom_url:sugestao?.ichom_url||null,
         publicado:false,
         ativo:true,
+        versao:1,
+        episodio_pai_id:null,
       }).select("id").single();
 
       if(error){setErro(error.message);setSalvando(false);return;}
@@ -960,11 +1041,55 @@ function DetalheEpisodio({episodio,apiKey,onVoltar}){
           </div>
           {ep.descricao&&<div style={{fontSize:12,color:T.inkFaint,marginTop:4}}>{ep.descricao}</div>}
         </div>
-        {!ep.publicado&&(
-          <Btn onClick={publicar} disabled={publicando} style={{flexShrink:0}}>
-            {publicando?"Publicando...":"✓ Publicar"}
+        <div style={{display:"flex",gap:8,flexShrink:0}}>
+          {!ep.publicado&&(
+            <Btn onClick={publicar} disabled={publicando}>
+              {publicando?"Publicando...":"✓ Publicar"}
+            </Btn>
+          )}
+          {ep.publicado&&!ep.tem_versao_pendente&&(
+            <Btn variant="outline" onClick={async()=>{
+              if(window.confirm("Criar nova versão de rascunho de "+ep.nome+"? O episódio atual continua ativo até você publicar a nova versão.")){{
+                const novoId=await criarNovaVersao(ep);
+                if(novoId){
+                  // Marcar que tem versão pendente
+                  await supabase.from("episodios").update({tem_versao_pendente:true}).eq("id",ep.id);
+                  onVoltar();
+                }
+              }}
+            }}>
+              📋 Nova versão
+            </Btn>
+          )}
+          {ep.publicado&&(
+            <Btn variant="outline" onClick={async()=>{
+              if(window.confirm("Arquivar este episódio? Ele não ficará mais disponível para novos pacientes.")){{
+                await supabase.from("episodios").update({ativo:false,publicado:false}).eq("id",ep.id);
+                onVoltar();
+              }}
+            }}>
+              Arquivar
+            </Btn>
+          )}
+          {!ep.publicado&&ep.episodio_pai_id&&(
+            <Btn onClick={async()=>{
+              if(window.confirm("Publicar esta nova versão? Os pacientes do episódio anterior serão migrados automaticamente e o episódio anterior será arquivado.")){{
+                await publicarNovaVersao(ep.id,ep.episodio_pai_id);
+                onVoltar();
+              }}
+            }}>
+              ✓ Publicar nova versão →
+            </Btn>
+          )}
+          <Btn variant="danger" onClick={async()=>{
+            if(window.confirm("Deletar permanentemente "+ep.nome+"? Esta ação não pode ser desfeita.")){{
+              await deletarEpisodio(ep.id);
+              onVoltar();
+            }}
+          }}>
+            Deletar
           </Btn>
-        )}
+        </div>
       </div>
 
       {/* Resumo */}
