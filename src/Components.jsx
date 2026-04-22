@@ -583,61 +583,78 @@ function TelaEpisodios({apiKey}){
 
 // ─── Formulário de novo episódio ───────────────────────────────────
 function FormEpisodio({apiKey,onSalvo,onCancelar}){
+  // Campos básicos
   const[nome,setNome]=useState("");
   const[descricao,setDescricao]=useState("");
   const[cid,setCid]=useState("");
   const[duracao,setDuracao]=useState("12");
   const[renovavel,setRenovavel]=useState(true);
-  const[ichomSet,setIchomSet]=useState("");
+
+  // IA
+  const[buscando,setBuscando]=useState(false);
+  const[sugestao,setSugestao]=useState(null); // {ichom_set, ichom_url, etapas:[]}
+  const timerRef=useRef(null);
+
+  // Etapas editáveis (acoes + desfechos unificados)
+  const[etapas,setEtapas]=useState([]);
   const[salvando,setSalvando]=useState(false);
   const[erro,setErro]=useState("");
 
-  // IA — sugestão ICHOM
-  const[buscandoIchom,setBuscandoIchom]=useState(false);
-  const[sugestaoIchom,setSugestaoIchom]=useState(null);
-  const timerRef=useRef(null);
+  const TIPO_COR={consulta:T.green,exame:T.purple,medicamento:T.blue,estilo_vida:T.orange,questionario:T.blue,desfecho_clinico:T.green,desfecho_pro:T.purple,outro:T.inkMid};
+  const TIPO_ICON={consulta:"🩺",exame:"🔬",medicamento:"💊",estilo_vida:"🌿",questionario:"📝",desfecho_clinico:"🎯",desfecho_pro:"📊",outro:"📋"};
 
-  const buscarIchom=async(cidTxt,nomeTxt)=>{
-    if((!cidTxt&&!nomeTxt)||!apiKey.startsWith("sk-"))return;
-    setBuscandoIchom(true);
+  const buscarSugestoes=async(cidTxt,nomeTxt)=>{
+    if((!cidTxt&&nomeTxt.length<5)||!apiKey.startsWith("sk-"))return;
+    setBuscando(true);
+    setSugestao(null);
     try{
       const res=await fetch("/.netlify/functions/claude",{
         method:"POST",
         headers:{"Content-Type":"application/json","x-api-key":apiKey,"anthropic-version":"2023-06-01"},
         body:JSON.stringify({
           model:"claude-sonnet-4-20250514",
-          max_tokens:800,
-          messages:[{role:"user",content:"Voce e especialista em outcomes de saude e conjuntos ICHOM (International Consortium for Health Outcomes Measurement). Para a condicao clinica: CID "+cidTxt+" / "+nomeTxt+", retorne SOMENTE um JSON com: {ichom_set: nome do conjunto ICHOM mais adequado, ichom_url: url do conjunto, desfechos_sugeridos: [{nome, tipo (clinico ou pro), unidade, frequencia_coleta, ichom_referencia, intermediario}]}. Se nao houver conjunto ICHOM especifico, sugira desfechos baseados em evidencias para esta condicao. Retorne SOMENTE o JSON."}]
+          max_tokens:1200,
+          messages:[{role:"user",content:"Voce e especialista em medicina baseada em evidencias e conjuntos ICHOM. Para a condicao: CID "+cidTxt+" / "+nomeTxt+" com duracao de "+duracao+" meses, sugira um protocolo de episodio clinico completo. Retorne SOMENTE um JSON com: {ichom_set, ichom_url, etapas:[{titulo, tipo (consulta|exame|medicamento|estilo_vida|questionario|desfecho_clinico|desfecho_pro), dia, responsavel (medico|paciente|ana), unidade, meta, frequencia_coleta, intermediario, ichom_ref, descricao}]}. dia = dia apos inicio (0=inicio, 30=1mes, 90=3meses etc). Para desfechos inclua unidade e meta. Para acoes inclua descricao curta. Retorne SOMENTE o JSON."}]
         })
       });
       const data=await res.json();
       const raw=(data.content?.[0]?.text||"{}").trim();
       const match=raw.match(/\{[\s\S]*\}/);
-      if(match)setSugestaoIchom(JSON.parse(match[0]));
+      if(match){
+        const parsed=JSON.parse(match[0]);
+        setSugestao(parsed);
+        // Pré-popular etapas com as sugestões
+        setEtapas((parsed.etapas||[]).map((e,i)=>({...e,id:"temp_"+i,incluir:true})));
+      }
     }catch(e){console.warn(e);}
-    finally{setBuscandoIchom(false);}
+    finally{setBuscando(false);}
   };
 
   const handleCid=(val)=>{
     setCid(val);
     clearTimeout(timerRef.current);
-    if(val.length>=3||nome.length>=5){
-      timerRef.current=setTimeout(()=>buscarIchom(val,nome),1200);
-    }
+    if(val.length>=3)timerRef.current=setTimeout(()=>buscarSugestoes(val,nome),1200);
   };
 
   const handleNome=(val)=>{
     setNome(val);
     clearTimeout(timerRef.current);
-    if(val.length>=8){
-      timerRef.current=setTimeout(()=>buscarIchom(cid,val),1500);
-    }
+    if(val.length>=8)timerRef.current=setTimeout(()=>buscarSugestoes(cid,val),1500);
   };
+
+  const adicionarEtapa=()=>{
+    setEtapas(prev=>[...prev,{id:"temp_"+Date.now(),titulo:"",tipo:"consulta",dia:0,responsavel:"medico",descricao:"",incluir:true}]);
+  };
+
+  const removerEtapa=(id)=>setEtapas(prev=>prev.filter(e=>e.id!==id));
+
+  const atualizarEtapa=(id,campo,valor)=>setEtapas(prev=>prev.map(e=>e.id===id?{...e,[campo]:valor}:e));
 
   const handleSalvar=async()=>{
     if(!nome.trim()){setErro("Nome é obrigatório");return;}
     setSalvando(true);setErro("");
     try{
+      // Salvar episódio
       const{data:ep,error}=await supabase.from("episodios").insert({
         nome:nome.trim(),
         descricao:descricao.trim()||null,
@@ -645,28 +662,47 @@ function FormEpisodio({apiKey,onSalvo,onCancelar}){
         duracao_meses:Number(duracao),
         renovavel,
         tipo:"institucional",
-        ichom_set:sugestaoIchom?.ichom_set||ichomSet||null,
-        ichom_url:sugestaoIchom?.ichom_url||null,
+        ichom_set:sugestao?.ichom_set||null,
+        ichom_url:sugestao?.ichom_url||null,
         publicado:false,
         ativo:true,
       }).select("id").single();
 
       if(error){setErro(error.message);setSalvando(false);return;}
 
-      // Salvar desfechos sugeridos pela IA
-      if(sugestaoIchom?.desfechos_sugeridos?.length>0){
-        await supabase.from("episodio_desfechos").insert(
-          sugestaoIchom.desfechos_sugeridos.map((d,i)=>({
-            episodio_id:ep.id,
-            nome:d.nome,
-            tipo:d.tipo||"clinico",
-            unidade:d.unidade||null,
-            frequencia_coleta:d.frequencia_coleta||"trimestral",
-            ichom_referencia:d.ichom_referencia||null,
-            intermediario:d.intermediario!==false,
-            ordem:i,
-          }))
-        );
+      // Salvar etapas incluídas
+      const incluidas=etapas.filter(e=>e.incluir&&e.titulo?.trim());
+      const acoes=incluidas.filter(e=>!e.tipo?.startsWith("desfecho"));
+      const desfechos=incluidas.filter(e=>e.tipo?.startsWith("desfecho"));
+
+      if(acoes.length>0){
+        await supabase.from("episodio_acoes").insert(acoes.map((e,i)=>({
+          episodio_id:ep.id,
+          titulo:e.titulo.trim(),
+          descricao:e.descricao||null,
+          tipo:e.tipo,
+          frequencia:e.frequencia||"unico",
+          responsavel:e.responsavel||"medico",
+          dia_inicio:Number(e.dia)||0,
+          obrigatorio:true,
+          ordem:i,
+        })));
+      }
+
+      if(desfechos.length>0){
+        await supabase.from("episodio_desfechos").insert(desfechos.map((e,i)=>({
+          episodio_id:ep.id,
+          nome:e.titulo.trim(),
+          descricao:e.descricao||null,
+          tipo:e.tipo==="desfecho_pro"?"pro":"clinico",
+          unidade:e.unidade||null,
+          valor_meta:e.meta?Number(e.meta):null,
+          frequencia_coleta:e.frequencia_coleta||"trimestral",
+          ichom_referencia:e.ichom_ref||null,
+          intermediario:e.intermediario!==false,
+          dia_inicio:Number(e.dia)||null,
+          ordem:i,
+        })));
       }
 
       onSalvo();
@@ -674,94 +710,177 @@ function FormEpisodio({apiKey,onSalvo,onCancelar}){
     finally{setSalvando(false);}
   };
 
+  const etapasOrdenadas=[...etapas].sort((a,b)=>(Number(a.dia)||0)-(Number(b.dia)||0));
+
   return(
-    <div style={{padding:"28px",maxWidth:760,margin:"0 auto"}}>
+    <div style={{padding:"28px",maxWidth:920,margin:"0 auto"}}>
       <div style={{display:"flex",alignItems:"center",gap:12,marginBottom:24}}>
         <button onClick={onCancelar} style={{background:"none",border:"none",cursor:"pointer",color:T.inkMid,fontSize:20,padding:0}}>←</button>
         <div style={{fontSize:22,fontWeight:600,color:T.ink}}>Novo episódio clínico</div>
       </div>
 
-      <div style={{display:"grid",gridTemplateColumns:"1fr 1fr",gap:16}}>
+      <div style={{display:"grid",gridTemplateColumns:"340px 1fr",gap:20,alignItems:"flex-start"}}>
 
-        {/* Coluna esquerda — dados básicos */}
-        <div>
-          <Card style={{padding:"20px",marginBottom:16}}>
-            <div style={{fontSize:14,fontWeight:500,color:T.ink,marginBottom:16}}>Identificação</div>
-            <Input label="NOME DO EPISÓDIO" value={nome} onChange={handleNome} placeholder="Ex: Controle da Hipertensão Arterial" required/>
-            <Textarea label="DESCRIÇÃO" value={descricao} onChange={setDescricao} placeholder="Objetivo clínico e população alvo..." rows={2}/>
-            <Input label="CID PRINCIPAL" value={cid} onChange={handleCid} placeholder="Ex: I10"/>
-            {buscandoIchom&&(
-              <div style={{fontSize:12,color:T.blue,display:"flex",alignItems:"center",gap:6,marginTop:-8,marginBottom:12}}>
+        {/* Coluna esquerda — identificação */}
+        <div style={{display:"flex",flexDirection:"column",gap:16}}>
+          <Card style={{padding:"20px"}}>
+            <div style={{fontSize:13,fontWeight:500,color:T.ink,marginBottom:14}}>Identificação</div>
+            <Input label="NOME DO EPISÓDIO" value={nome} onChange={handleNome}
+              placeholder="Ex: Controle da Hipertensão Arterial" required/>
+            <Textarea label="DESCRIÇÃO" value={descricao} onChange={setDescricao}
+              placeholder="Objetivo clínico e população alvo..." rows={2}/>
+            <div style={{display:"grid",gridTemplateColumns:"1fr 1fr",gap:12}}>
+              <Input label="CID PRINCIPAL" value={cid} onChange={handleCid} placeholder="Ex: I10"/>
+              <Input label="DURAÇÃO (MESES)" value={duracao} onChange={setDuracao} type="number"/>
+            </div>
+            <Select label="RENOVÁVEL" value={renovavel?"sim":"nao"} onChange={v=>setRenovavel(v==="sim")}
+              options={[{value:"sim",label:"Sim — doença crônica"},{value:"nao",label:"Não — episódio único"}]}/>
+
+            {buscando&&(
+              <div style={{fontSize:12,color:T.blue,display:"flex",alignItems:"center",gap:6,padding:"8px 0"}}>
                 <div style={{width:12,height:12,border:`2px solid ${T.blue}30`,borderTop:`2px solid ${T.blue}`,borderRadius:"50%",animation:"spin 0.8s linear infinite"}}/>
-                Buscando referências ICHOM...
+                Consultando evidências e ICHOM...
+              </div>
+            )}
+
+            {sugestao?.ichom_set&&(
+              <div style={{padding:"10px 14px",background:T.greenBg,border:`1px solid ${T.greenBorder}`,borderRadius:8,fontSize:12}}>
+                <div style={{fontWeight:500,color:T.greenDark,marginBottom:2}}>✦ ICHOM: {sugestao.ichom_set}</div>
+                {sugestao.ichom_url&&<div style={{color:T.inkFaint,fontSize:10}}>{sugestao.ichom_url}</div>}
               </div>
             )}
           </Card>
 
-          <Card style={{padding:"20px"}}>
-            <div style={{fontSize:14,fontWeight:500,color:T.ink,marginBottom:16}}>Configuração</div>
-            <div style={{display:"grid",gridTemplateColumns:"1fr 1fr",gap:12}}>
-              <Input label="DURAÇÃO (MESES)" value={duracao} onChange={setDuracao} type="number"/>
-              <Select label="RENOVÁVEL" value={renovavel?"sim":"nao"} onChange={v=>setRenovavel(v==="sim")}
-                options={[{value:"sim",label:"Sim — doença crônica"},{value:"nao",label:"Não — episódio único"}]}/>
-            </div>
-            {sugestaoIchom?.ichom_set&&(
-              <div style={{padding:"10px 14px",background:T.greenBg,border:`1px solid ${T.greenBorder}`,borderRadius:8,fontSize:12}}>
-                <div style={{fontWeight:500,color:T.greenDark,marginBottom:2}}>✦ Conjunto ICHOM identificado</div>
-                <div style={{color:T.inkMid}}>{sugestaoIchom.ichom_set}</div>
+          {/* Legenda de tipos */}
+          <Card style={{padding:"14px 16px"}}>
+            <div style={{fontSize:11,color:T.inkFaint,marginBottom:10,fontWeight:500,letterSpacing:"0.08em"}}>TIPOS DE ETAPA</div>
+            {Object.entries(TIPO_ICON).map(([tipo,icon])=>(
+              <div key={tipo} style={{display:"flex",alignItems:"center",gap:8,marginBottom:5}}>
+                <span style={{fontSize:14}}>{icon}</span>
+                <span style={{fontSize:11,color:T.inkMid,textTransform:"capitalize"}}>{tipo.replace("_"," ")}</span>
+                <div style={{width:8,height:8,borderRadius:"50%",background:TIPO_COR[tipo]||T.inkMid,marginLeft:"auto"}}/>
               </div>
-            )}
+            ))}
           </Card>
         </div>
 
-        {/* Coluna direita — desfechos sugeridos pela IA */}
+        {/* Coluna direita — timeline */}
         <div>
-          <Card style={{padding:"20px"}}>
-            <div style={{display:"flex",justifyContent:"space-between",alignItems:"center",marginBottom:16}}>
-              <div style={{fontSize:14,fontWeight:500,color:T.ink}}>Desfechos sugeridos pela IA</div>
-              {sugestaoIchom?.desfechos_sugeridos?.length>0&&(
-                <Badge label={sugestaoIchom.desfechos_sugeridos.length+" desfechos"} color={T.green}/>
-              )}
+          <div style={{display:"flex",justifyContent:"space-between",alignItems:"center",marginBottom:12}}>
+            <div>
+              <div style={{fontSize:13,fontWeight:500,color:T.ink}}>Timeline do episódio</div>
+              <div style={{fontSize:11,color:T.inkFaint,marginTop:2}}>
+                {etapas.filter(e=>e.incluir).length} etapas selecionadas
+                {sugestao&&" · sugeridas pela IA com base em evidências"}
+              </div>
             </div>
+            <Btn small onClick={adicionarEtapa}>+ Adicionar etapa</Btn>
+          </div>
 
-            {!sugestaoIchom&&!buscandoIchom&&(
-              <div style={{textAlign:"center",padding:"32px 16px",color:T.inkFaint}}>
-                <div style={{fontSize:28,marginBottom:8}}>🎯</div>
-                <div style={{fontSize:13}}>Preencha o CID ou nome do episódio</div>
-                <div style={{fontSize:11,marginTop:4}}>A IA vai sugerir os desfechos ICHOM recomendados</div>
-              </div>
-            )}
+          {etapas.length===0&&!buscando&&(
+            <Card style={{padding:"40px",textAlign:"center"}}>
+              <div style={{fontSize:32,marginBottom:12}}>🏥</div>
+              <div style={{fontSize:14,fontWeight:500,color:T.ink,marginBottom:6}}>Preencha o CID ou nome</div>
+              <div style={{fontSize:12,color:T.inkMid}}>A IA vai sugerir as etapas do episódio com base em evidências clínicas e ICHOM</div>
+            </Card>
+          )}
 
-            {sugestaoIchom?.desfechos_sugeridos?.map((d,i)=>(
-              <div key={i} style={{padding:"12px 14px",background:T.bgWarm,borderRadius:8,marginBottom:8,
-                borderLeft:`3px solid ${d.tipo==="pro"?T.purple:T.green}`}}>
-                <div style={{display:"flex",justifyContent:"space-between",alignItems:"flex-start",marginBottom:4}}>
-                  <div style={{fontSize:13,fontWeight:500,color:T.ink}}>{d.nome}</div>
-                  <Badge label={d.tipo==="pro"?"PRO":"Clínico"} color={d.tipo==="pro"?T.purple:T.green}/>
-                </div>
-                <div style={{display:"flex",gap:8,flexWrap:"wrap"}}>
-                  {d.unidade&&<Badge label={d.unidade} color={T.inkMid}/>}
-                  <Badge label={d.frequencia_coleta||"trimestral"} color={T.blue} bg={T.blueBg}/>
-                  {d.intermediario===false&&<Badge label="Desfecho final" color={T.orange}/>}
-                </div>
-                {d.ichom_referencia&&(
-                  <div style={{fontSize:10,color:T.inkFaint,marginTop:4}}>{d.ichom_referencia}</div>
-                )}
-              </div>
-            ))}
+          {buscando&&(
+            <Card style={{padding:"40px",textAlign:"center"}}>
+              <Spinner/>
+              <div style={{fontSize:13,color:T.inkMid,marginTop:8}}>Gerando protocolo clínico...</div>
+            </Card>
+          )}
 
-            {sugestaoIchom&&(
-              <div style={{fontSize:11,color:T.inkFaint,marginTop:8,padding:"8px 12px",background:T.bgWarm,borderRadius:6}}>
-                ✓ Estes desfechos serão adicionados automaticamente ao episódio. Você poderá editar, remover ou adicionar mais após salvar.
-              </div>
-            )}
-          </Card>
+          {etapasOrdenadas.length>0&&(
+            <div style={{display:"flex",flexDirection:"column",gap:8}}>
+              {etapasOrdenadas.map((etapa,idx)=>{
+                const cor=TIPO_COR[etapa.tipo]||T.inkMid;
+                const icon=TIPO_ICON[etapa.tipo]||"📋";
+                const dia=Number(etapa.dia)||0;
+                const diaLabel=dia===0?"Início":dia<30?"Dia "+dia:dia%30===0?"Mês "+(dia/30):"Dia "+dia;
+                const isDesfecho=etapa.tipo?.startsWith("desfecho");
+
+                return(
+                  <div key={etapa.id} style={{display:"flex",gap:10,alignItems:"flex-start",
+                    opacity:etapa.incluir?1:0.4,transition:"opacity 0.2s"}}>
+
+                    {/* Checkbox + dia */}
+                    <div style={{flexShrink:0,width:64,display:"flex",flexDirection:"column",alignItems:"center",gap:3,paddingTop:10}}>
+                      <input type="checkbox" checked={etapa.incluir!==false}
+                        onChange={e=>atualizarEtapa(etapa.id,"incluir",e.target.checked)}
+                        style={{width:16,height:16,accentColor:T.green}}/>
+                      <div style={{fontSize:9,color:T.inkFaint,textAlign:"center",lineHeight:1.3}}>{diaLabel}</div>
+                    </div>
+
+                    {/* Card da etapa */}
+                    <Card style={{flex:1,padding:"12px 14px",borderLeft:`3px solid ${cor}`}}>
+                      <div style={{display:"flex",gap:8,alignItems:"flex-start"}}>
+                        <span style={{fontSize:18,flexShrink:0,marginTop:1}}>{icon}</span>
+                        <div style={{flex:1,display:"flex",flexDirection:"column",gap:6}}>
+                          {/* Título */}
+                          <input value={etapa.titulo||""} onChange={e=>atualizarEtapa(etapa.id,"titulo",e.target.value)}
+                            placeholder="Título da etapa"
+                            style={{width:"100%",padding:"5px 8px",border:`1px solid ${T.border}`,borderRadius:6,
+                              fontFamily:T.f,fontSize:13,fontWeight:500,color:T.ink,outline:"none",boxSizing:"border-box"}}/>
+                          {/* Linha de controles */}
+                          <div style={{display:"flex",gap:6,flexWrap:"wrap",alignItems:"center"}}>
+                            <select value={etapa.tipo||"consulta"} onChange={e=>atualizarEtapa(etapa.id,"tipo",e.target.value)}
+                              style={{fontSize:11,padding:"3px 6px",border:`1px solid ${T.border}`,borderRadius:6,fontFamily:T.f,color:T.inkMid}}>
+                              <option value="consulta">🩺 Consulta</option>
+                              <option value="exame">🔬 Exame</option>
+                              <option value="medicamento">💊 Medicamento</option>
+                              <option value="estilo_vida">🌿 Estilo de vida</option>
+                              <option value="questionario">📝 Questionário</option>
+                              <option value="desfecho_clinico">🎯 Desfecho clínico</option>
+                              <option value="desfecho_pro">📊 Desfecho PRO</option>
+                              <option value="outro">📋 Outro</option>
+                            </select>
+                            <select value={etapa.responsavel||"medico"} onChange={e=>atualizarEtapa(etapa.id,"responsavel",e.target.value)}
+                              style={{fontSize:11,padding:"3px 6px",border:`1px solid ${T.border}`,borderRadius:6,fontFamily:T.f,color:T.inkMid}}>
+                              <option value="medico">Médico</option>
+                              <option value="paciente">Paciente</option>
+                              <option value="ana">Ana</option>
+                              <option value="equipe">Equipe</option>
+                            </select>
+                            <input type="number" value={etapa.dia||0} min={0} max={duracao*30}
+                              onChange={e=>atualizarEtapa(etapa.id,"dia",e.target.value)}
+                              title="Dia após início do episódio"
+                              style={{width:56,fontSize:11,padding:"3px 6px",border:`1px solid ${T.border}`,borderRadius:6,fontFamily:T.f,color:T.inkMid,textAlign:"center"}}/>
+                            <span style={{fontSize:10,color:T.inkFaint}}>dias</span>
+                            {isDesfecho&&(
+                              <>
+                                <input value={etapa.unidade||""} onChange={e=>atualizarEtapa(etapa.id,"unidade",e.target.value)}
+                                  placeholder="Unidade (ex: %)"
+                                  style={{width:70,fontSize:11,padding:"3px 6px",border:`1px solid ${T.border}`,borderRadius:6,fontFamily:T.f,color:T.inkMid}}/>
+                                <input value={etapa.meta||""} onChange={e=>atualizarEtapa(etapa.id,"meta",e.target.value)}
+                                  placeholder="Meta"
+                                  style={{width:54,fontSize:11,padding:"3px 6px",border:`1px solid ${T.border}`,borderRadius:6,fontFamily:T.f,color:T.inkMid}}/>
+                              </>
+                            )}
+                          </div>
+                          {/* Descrição */}
+                          {etapa.descricao&&(
+                            <div style={{fontSize:11,color:T.inkFaint,lineHeight:1.5}}>{etapa.descricao}</div>
+                          )}
+                        </div>
+                        <button onClick={()=>removerEtapa(etapa.id)}
+                          style={{background:"none",border:"none",cursor:"pointer",color:T.red,fontSize:16,flexShrink:0,opacity:0.4}}
+                          onMouseOver={e=>e.currentTarget.style.opacity=1}
+                          onMouseOut={e=>e.currentTarget.style.opacity=0.4}>×</button>
+                      </div>
+                    </Card>
+                  </div>
+                );
+              })}
+            </div>
+          )}
         </div>
       </div>
 
-      {erro&&<div style={{marginTop:12,fontSize:13,color:T.red,padding:"10px 14px",background:T.redBg,borderRadius:8}}>{erro}</div>}
+      {erro&&<div style={{marginTop:16,fontSize:13,color:T.red,padding:"10px 14px",background:T.redBg,borderRadius:8}}>{erro}</div>}
 
-      <div style={{display:"flex",gap:10,marginTop:16,justifyContent:"flex-end"}}>
+      <div style={{display:"flex",gap:10,marginTop:20,justifyContent:"flex-end"}}>
         <Btn onClick={onCancelar} variant="outline">Cancelar</Btn>
         <Btn onClick={handleSalvar} disabled={salvando||!nome.trim()}>
           {salvando?"Salvando...":"✓ Criar episódio →"}
@@ -770,6 +889,7 @@ function FormEpisodio({apiKey,onSalvo,onCancelar}){
     </div>
   );
 }
+
 
 // ─── Detalhe do Episódio — Timeline ─────────────────────────────
 function DetalheEpisodio({episodio,apiKey,onVoltar}){
