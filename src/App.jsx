@@ -24,7 +24,11 @@ export default function App(){
         setScreen("login");
       }
     });
-    const{data:{subscription}}=supabase.auth.onAuthStateChange((event)=>{
+    const{data:{subscription}}=supabase.auth.onAuthStateChange((event,session)=>{
+      if(event==="SIGNED_IN"&&session?.user){
+        setAdmin({userId:session.user.id,email:session.user.email,nome:"Administrador HVV"});
+        setScreen("app");
+      }
       if(event==="SIGNED_OUT"){setAdmin(null);setScreen("login");}
     });
     return()=>subscription.unsubscribe();
