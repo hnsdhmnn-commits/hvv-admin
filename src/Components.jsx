@@ -329,6 +329,7 @@ export function AppAdmin({admin,apiKey,onLogout}){
   const MENU=[
     {id:"metricas",label:"Métricas",icon:"📊"},
     {id:"episodios",label:"Episódios Clínicos",icon:"🏥"},
+    {id:"presencial",label:"Atendimento Presencial",icon:"🏨"},
     {id:"medicos",label:"Médicos",icon:"👨‍⚕️"},
     {id:"programas",label:"Programas",icon:"✨"},
   ];
@@ -371,6 +372,7 @@ export function AppAdmin({admin,apiKey,onLogout}){
       <div style={{flex:1,overflowY:"auto"}}>
         {tela==="metricas"&&<TelaMetricas/>}
         {tela==="episodios"&&<TelaEpisodios apiKey={apiKey}/>}
+        {tela==="presencial"&&<TelaPresencial/>}
         {tela==="medicos"&&<TelaMedicos/>}
         {tela==="programas"&&<TelaProgramas/>}
       </div>
@@ -1484,6 +1486,673 @@ function TelaProgramas(){
           </Card>
         ))}
       </div>
+    </div>
+  );
+}
+
+// ─── Tela Atendimento Presencial ──────────────────────────────────
+function TelaPresencial(){
+  const[aba,setAba]=useState("internacoes");
+  const ABAS=[
+    {id:"internacoes",label:"🏥 Internações"},
+    {id:"ps",label:"🚨 Pronto-Socorro"},
+    {id:"eletivas",label:"🏨 Consultas Eletivas"},
+    {id:"exames",label:"🔬 Exames"},
+    {id:"mensagens",label:"💬 Mensagens"},
+  ];
+  return(
+    <div style={{padding:"28px",maxWidth:1100,margin:"0 auto"}}>
+      <div style={{marginBottom:20}}>
+        <div style={{fontSize:22,fontWeight:600,color:T.ink}}>Atendimento Presencial</div>
+        <div style={{fontSize:13,color:T.inkMid,marginTop:4}}>Gestão de internações, encaminhamentos, exames e comunicação</div>
+      </div>
+      <div style={{display:"flex",gap:0,borderBottom:`0.5px solid ${T.border}`,marginBottom:20}}>
+        {ABAS.map(a=>(
+          <button key={a.id} onClick={()=>setAba(a.id)}
+            style={{padding:"10px 18px",background:"none",border:"none",cursor:"pointer",fontFamily:T.f,fontSize:13,
+              borderBottom:`2px solid ${aba===a.id?T.green:"transparent"}`,
+              color:aba===a.id?T.green:T.inkMid,fontWeight:aba===a.id?500:400,whiteSpace:"nowrap"}}>
+            {a.label}
+          </button>
+        ))}
+      </div>
+      {aba==="internacoes"&&<AbaInternacoes/>}
+      {aba==="ps"&&<AbaPS/>}
+      {aba==="eletivas"&&<AbaEletivas/>}
+      {aba==="exames"&&<AbaExamesAdmin/>}
+      {aba==="mensagens"&&<AbaMensagensAdmin/>}
+    </div>
+  );
+}
+
+// ─── Aba Internações ──────────────────────────────────────────────
+function AbaInternacoes(){
+  const[lista,setLista]=useState([]);
+  const[loading,setLoading]=useState(true);
+  const[mostrarForm,setMostrarForm]=useState(false);
+  const[editando,setEditando]=useState(null);
+  const[pacientes,setPacientes]=useState([]);
+  const[unidades,setUnidades]=useState([]);
+
+  useEffect(()=>{
+    Promise.all([
+      supabase.from("internacoes").select("*,pacientes(nome),unidades_hospitalares(nome,tipo)").order("created_at",{ascending:false}),
+      supabase.from("pacientes").select("id,nome").order("nome"),
+      supabase.from("unidades_hospitalares").select("*").eq("ativo",true).order("nome"),
+    ]).then(([{data:int},{data:pac},{data:uni}])=>{
+      setLista(int||[]);setPacientes(pac||[]);setUnidades(uni||[]);setLoading(false);
+    });
+  },[]);
+
+  const STATUS_COR={internado:T.orange,alta:T.green,transferido:T.blue,obito:T.red};
+  const STATUS_LABEL={internado:"Internado",alta:"Alta",transferido:"Transferido",obito:"Óbito"};
+
+  const salvarInternacao=async(dados)=>{
+    if(editando){
+      await supabase.from("internacoes").update({...dados,updated_at:new Date().toISOString()}).eq("id",editando.id);
+    }else{
+      await supabase.from("internacoes").insert(dados);
+    }
+    const{data}=await supabase.from("internacoes").select("*,pacientes(nome),unidades_hospitalares(nome,tipo)").order("created_at",{ascending:false});
+    setLista(data||[]);setMostrarForm(false);setEditando(null);
+  };
+
+  if(loading)return<Spinner/>;
+  return(
+    <div>
+      <div style={{display:"flex",justifyContent:"space-between",alignItems:"center",marginBottom:16}}>
+        <div style={{fontSize:13,color:T.inkMid}}>{lista.filter(i=>i.status==="internado").length} paciente(s) internado(s)</div>
+        <Btn small onClick={()=>{setEditando(null);setMostrarForm(true)}}>+ Registrar internação</Btn>
+      </div>
+
+      {(mostrarForm||editando)&&(
+        <FormInternacao
+          inicial={editando}
+          pacientes={pacientes}
+          unidades={unidades}
+          onSalvar={salvarInternacao}
+          onCancelar={()=>{setMostrarForm(false);setEditando(null);}}/>
+      )}
+
+      {lista.length===0?(
+        <Card style={{padding:"40px",textAlign:"center",color:T.inkFaint}}>
+          <div style={{fontSize:32,marginBottom:8}}>🏥</div>
+          <div>Nenhuma internação registrada</div>
+        </Card>
+      ):(
+        <div style={{display:"flex",flexDirection:"column",gap:8}}>
+          {lista.map(i=>(
+            <Card key={i.id} style={{padding:"16px 20px",borderLeft:`3px solid ${STATUS_COR[i.status]||T.border}`}}>
+              <div style={{display:"flex",alignItems:"flex-start",gap:16}}>
+                <div style={{flex:1}}>
+                  <div style={{display:"flex",alignItems:"center",gap:8,marginBottom:4}}>
+                    <div style={{fontSize:14,fontWeight:500,color:T.ink}}>{i.pacientes?.nome||"—"}</div>
+                    <Badge label={STATUS_LABEL[i.status]||i.status} color={STATUS_COR[i.status]||T.inkMid}/>
+                    {i.unidade_parceira&&<Badge label="Parceiro" color={T.green} bg={T.greenBg}/>}
+                  </div>
+                  <div style={{display:"flex",gap:16,flexWrap:"wrap",fontSize:12,color:T.inkMid}}>
+                    {i.senha_internacao&&<span>Senha: <strong>{i.senha_internacao}</strong></span>}
+                    <span>Unidade: {i.unidades_hospitalares?.nome||i.unidade_texto||"—"}</span>
+                    {i.unidade_telefone&&<span>Tel: {i.unidade_telefone}</span>}
+                    <span>Internação: {i.data_internacao}</span>
+                    {i.data_prevista_alta&&<span>Prev. alta: {i.data_prevista_alta}</span>}
+                    {i.data_efetiva_alta&&<span style={{color:T.green}}>Alta: {i.data_efetiva_alta}</span>}
+                  </div>
+                  {i.oportunidades_auditoria&&(
+                    <div style={{marginTop:6,fontSize:12,color:T.orange,padding:"4px 10px",background:T.orangeBg,borderRadius:6,display:"inline-block"}}>
+                      ⚠️ Auditoria: {i.oportunidades_auditoria}
+                    </div>
+                  )}
+                </div>
+                <Btn small variant="outline" onClick={()=>{setEditando(i);setMostrarForm(false);}}>Editar</Btn>
+              </div>
+            </Card>
+          ))}
+        </div>
+      )}
+    </div>
+  );
+}
+
+// ─── Form Internação ──────────────────────────────────────────────
+function FormInternacao({inicial,pacientes,unidades,onSalvar,onCancelar}){
+  const[pacId,setPacId]=useState(inicial?.paciente_id||"");
+  const[senha,setSenha]=useState(inicial?.senha_internacao||"");
+  const[unidadeId,setUnidadeId]=useState(inicial?.unidade_id||"");
+  const[unidadeTxt,setUnidadeTxt]=useState(inicial?.unidade_texto||"");
+  const[tel,setTel]=useState(inicial?.unidade_telefone||"");
+  const[parceira,setParceira]=useState(inicial?.unidade_parceira||false);
+  const[dataInt,setDataInt]=useState(inicial?.data_internacao||dataHoje());
+  const[dataPrevAlta,setDataPrevAlta]=useState(inicial?.data_prevista_alta||"");
+  const[dataEfAlta,setDataEfAlta]=useState(inicial?.data_efetiva_alta||"");
+  const[auditoria,setAuditoria]=useState(inicial?.oportunidades_auditoria||"");
+  const[status,setStatus]=useState(inicial?.status||"internado");
+  const[salvando,setSalvando]=useState(false);
+
+  // Auto-preencher telefone ao selecionar unidade
+  useEffect(()=>{
+    if(unidadeId){
+      const u=unidades.find(u=>u.id===unidadeId);
+      if(u){setTel(u.telefone||"");setParceira(u.tipo==="parceiro");}
+    }
+  },[unidadeId]);
+
+  const handleSalvar=async()=>{
+    if(!pacId||!dataInt)return;
+    setSalvando(true);
+    await onSalvar({
+      paciente_id:pacId,
+      senha_internacao:senha||null,
+      unidade_id:unidadeId||null,
+      unidade_texto:unidadeTxt||null,
+      unidade_telefone:tel||null,
+      unidade_parceira:parceira,
+      data_internacao:dataInt,
+      data_prevista_alta:dataPrevAlta||null,
+      data_efetiva_alta:dataEfAlta||null,
+      oportunidades_auditoria:auditoria||null,
+      status,
+    });
+    setSalvando(false);
+  };
+
+  return(
+    <Card style={{padding:"20px",marginBottom:16,border:`1px solid ${T.greenBorder}`,background:T.greenBg}}>
+      <div style={{fontSize:14,fontWeight:500,color:T.ink,marginBottom:14}}>{inicial?"Editar internação":"Nova internação"}</div>
+      <div style={{display:"grid",gridTemplateColumns:"2fr 1fr 1fr",gap:12}}>
+        <Select label="PACIENTE" value={pacId} onChange={setPacId} required
+          options={[{value:"",label:"Selecionar paciente..."},...pacientes.map(p=>({value:p.id,label:p.nome}))]}/>
+        <Input label="SENHA DA INTERNAÇÃO" value={senha} onChange={setSenha} placeholder="Ex: 123456"/>
+        <Select label="STATUS" value={status} onChange={setStatus} options={[
+          {value:"internado",label:"Internado"},{value:"alta",label:"Alta"},
+          {value:"transferido",label:"Transferido"},{value:"obito",label:"Óbito"},
+        ]}/>
+      </div>
+      <div style={{display:"grid",gridTemplateColumns:"2fr 1fr 1fr",gap:12}}>
+        <Select label="UNIDADE HOSPITALAR" value={unidadeId} onChange={setUnidadeId}
+          options={[{value:"",label:"Selecionar ou digitar abaixo..."},...unidades.map(u=>({value:u.id,label:u.nome+" "+(u.tipo==="parceiro"?"★":"")}))]}/>
+        <Input label="UNIDADE (texto livre)" value={unidadeTxt} onChange={setUnidadeTxt} placeholder="Se não cadastrada"/>
+        <Input label="TELEFONE" value={tel} onChange={setTel} placeholder="(11) 9999-9999"/>
+      </div>
+      <div style={{display:"grid",gridTemplateColumns:"1fr 1fr 1fr 1fr",gap:12}}>
+        <Input label="DATA INTERNAÇÃO" value={dataInt} onChange={setDataInt} type="date" required/>
+        <Input label="PREV. ALTA" value={dataPrevAlta} onChange={setDataPrevAlta} type="date"/>
+        <Input label="ALTA EFETIVA" value={dataEfAlta} onChange={setDataEfAlta} type="date"/>
+        <div style={{paddingTop:18,display:"flex",alignItems:"center",gap:8}}>
+          <input type="checkbox" id="parceira" checked={parceira} onChange={e=>setParceira(e.target.checked)} style={{accentColor:T.green}}/>
+          <label htmlFor="parceira" style={{fontSize:12,color:T.inkMid,cursor:"pointer"}}>Unidade parceira</label>
+        </div>
+      </div>
+      <Textarea label="OPORTUNIDADES DE AUDITORIA" value={auditoria} onChange={setAuditoria} placeholder="Registre observações de auditoria..." rows={2}/>
+      <div style={{display:"flex",gap:10,justifyContent:"flex-end"}}>
+        <Btn variant="outline" small onClick={onCancelar}>Cancelar</Btn>
+        <Btn small onClick={handleSalvar} disabled={salvando||!pacId||!dataInt}>{salvando?"Salvando...":"✓ Salvar"}</Btn>
+      </div>
+    </Card>
+  );
+}
+
+// ─── Aba PS ───────────────────────────────────────────────────────
+function AbaPS(){
+  const[lista,setLista]=useState([]);
+  const[loading,setLoading]=useState(true);
+  const[expandido,setExpandido]=useState(null);
+  const[unidades,setUnidades]=useState([]);
+
+  useEffect(()=>{
+    Promise.all([
+      supabase.from("encaminhamentos").select("*,pacientes(nome),medicos(nome)").eq("tipo","ps").order("created_at",{ascending:false}),
+      supabase.from("unidades_hospitalares").select("*").eq("ativo",true).order("nome"),
+    ]).then(([{data:enc},{data:uni}])=>{setLista(enc||[]);setUnidades(uni||[]);setLoading(false);});
+  },[]);
+
+  const atualizar=async(id,campos)=>{
+    await supabase.from("encaminhamentos").update({...campos,updated_at:new Date().toISOString()}).eq("id",id);
+    const{data}=await supabase.from("encaminhamentos").select("*,pacientes(nome),medicos(nome)").eq("tipo","ps").order("created_at",{ascending:false});
+    setLista(data||[]);
+  };
+
+  const STATUS_COR={pendente:T.red,contato_realizado:T.orange,agendado:T.blue,realizado:T.green,cancelado:T.inkMid};
+  const DESFECHO_LABEL={liberado:"🏠 Liberado para casa",observacao:"👁 Em observação",enfermaria:"🛏 Internado — Enfermaria",cti:"🚨 Internado — CTI",cirurgia:"🔪 Indicação cirúrgica"};
+  const URGENCIA_COR={emergencia:T.red,urgente:T.orange,normal:T.inkMid};
+
+  if(loading)return<Spinner/>;
+  return(
+    <div>
+      <div style={{fontSize:13,color:T.inkMid,marginBottom:16}}>
+        {lista.filter(e=>e.status==="pendente").length} encaminhamento(s) pendente(s) de contato
+      </div>
+      {lista.length===0?(
+        <Card style={{padding:"40px",textAlign:"center",color:T.inkFaint}}>
+          <div style={{fontSize:32,marginBottom:8}}>🚨</div>
+          <div>Nenhum encaminhamento ao PS</div>
+        </Card>
+      ):(
+        <div style={{display:"flex",flexDirection:"column",gap:8}}>
+          {lista.map(enc=>{
+            const aberto=expandido===enc.id;
+            return(
+              <Card key={enc.id} style={{padding:"0",overflow:"hidden",borderLeft:`3px solid ${STATUS_COR[enc.status]||T.border}`}}>
+                <div style={{padding:"14px 18px",display:"flex",alignItems:"flex-start",gap:14,cursor:"pointer"}} onClick={()=>setExpandido(aberto?null:enc.id)}>
+                  <div style={{flex:1}}>
+                    <div style={{display:"flex",alignItems:"center",gap:8,marginBottom:4}}>
+                      <div style={{fontSize:14,fontWeight:500,color:T.ink}}>{enc.pacientes?.nome||"—"}</div>
+                      <Badge label={enc.status.replace("_"," ")} color={STATUS_COR[enc.status]||T.inkMid}/>
+                      {enc.urgencia==="emergencia"&&<Badge label="⚡ EMERGÊNCIA" color={T.red}/>}
+                      {enc.urgencia==="urgente"&&<Badge label="⚠️ URGENTE" color={T.orange}/>}
+                    </div>
+                    <div style={{fontSize:12,color:T.inkMid}}>
+                      Médico: {enc.medicos?.nome||"—"} · {new Date(enc.created_at).toLocaleString("pt-BR",{day:"numeric",month:"short",hour:"2-digit",minute:"2-digit"})}
+                      {enc.motivo&&<span> · {enc.motivo}</span>}
+                    </div>
+                    {enc.desfecho_ps&&(
+                      <div style={{marginTop:4,fontSize:12,fontWeight:500,color:T.green}}>{DESFECHO_LABEL[enc.desfecho_ps]}</div>
+                    )}
+                  </div>
+                  <span style={{fontSize:12,color:T.inkFaint}}>{aberto?"▲":"▼"}</span>
+                </div>
+                {aberto&&(
+                  <div style={{borderTop:`0.5px solid ${T.border}`,padding:"16px 18px",background:T.bgWarm}}>
+                    <div style={{display:"grid",gridTemplateColumns:"1fr 1fr 1fr",gap:12,marginBottom:12}}>
+                      <div>
+                        <div style={{fontSize:10,color:T.inkFaint,letterSpacing:"0.08em",marginBottom:5}}>TENTATIVA DE CONTATO</div>
+                        <input type="datetime-local" defaultValue={enc.hora_tentativa_contato?.slice(0,16)||""}
+                          onBlur={e=>atualizar(enc.id,{hora_tentativa_contato:e.target.value||null,tentativas_contato:(enc.tentativas_contato||0)+1})}
+                          style={{width:"100%",padding:"7px 10px",border:`1px solid ${T.border}`,borderRadius:8,fontFamily:T.f,fontSize:12}}/>
+                      </div>
+                      <div>
+                        <div style={{fontSize:10,color:T.inkFaint,letterSpacing:"0.08em",marginBottom:5}}>CONTATO REALIZADO</div>
+                        <input type="datetime-local" defaultValue={enc.hora_contato_realizado?.slice(0,16)||""}
+                          onBlur={e=>atualizar(enc.id,{hora_contato_realizado:e.target.value||null,status:e.target.value?"contato_realizado":enc.status})}
+                          style={{width:"100%",padding:"7px 10px",border:`1px solid ${T.border}`,borderRadius:8,fontFamily:T.f,fontSize:12}}/>
+                      </div>
+                      <div>
+                        <div style={{fontSize:10,color:T.inkFaint,letterSpacing:"0.08em",marginBottom:5}}>UNIDADE COMBINADA</div>
+                        <input defaultValue={enc.unidade_texto||""} placeholder="Nome da unidade"
+                          onBlur={e=>atualizar(enc.id,{unidade_texto:e.target.value,status:"agendado"})}
+                          style={{width:"100%",padding:"7px 10px",border:`1px solid ${T.border}`,borderRadius:8,fontFamily:T.f,fontSize:12}}/>
+                      </div>
+                    </div>
+                    <div>
+                      <div style={{fontSize:10,color:T.inkFaint,letterSpacing:"0.08em",marginBottom:8}}>DESFECHO</div>
+                      <div style={{display:"flex",gap:8,flexWrap:"wrap"}}>
+                        {Object.entries(DESFECHO_LABEL).map(([val,label])=>(
+                          <button key={val} onClick={()=>atualizar(enc.id,{desfecho_ps:val,status:"realizado"})}
+                            style={{padding:"7px 14px",borderRadius:8,border:`1px solid ${enc.desfecho_ps===val?T.green:T.border}`,
+                              background:enc.desfecho_ps===val?T.greenBg:T.surface,
+                              color:enc.desfecho_ps===val?T.green:T.inkMid,
+                              fontSize:12,cursor:"pointer",fontFamily:T.f}}>
+                            {label}
+                          </button>
+                        ))}
+                      </div>
+                    </div>
+                  </div>
+                )}
+              </Card>
+            );
+          })}
+        </div>
+      )}
+    </div>
+  );
+}
+
+// ─── Aba Consultas Eletivas ───────────────────────────────────────
+function AbaEletivas(){
+  const[lista,setLista]=useState([]);
+  const[loading,setLoading]=useState(true);
+  const[expandido,setExpandido]=useState(null);
+
+  useEffect(()=>{
+    supabase.from("encaminhamentos").select("*,pacientes(nome),medicos(nome)")
+      .eq("tipo","eletiva").order("created_at",{ascending:false})
+      .then(({data})=>{setLista(data||[]);setLoading(false);});
+  },[]);
+
+  const atualizar=async(id,campos)=>{
+    await supabase.from("encaminhamentos").update({...campos,updated_at:new Date().toISOString()}).eq("id",id);
+    const{data}=await supabase.from("encaminhamentos").select("*,pacientes(nome),medicos(nome)").eq("tipo","eletiva").order("created_at",{ascending:false});
+    setLista(data||[]);
+  };
+
+  const STATUS_COR={pendente:T.orange,contato_realizado:T.blue,agendado:T.blue,realizado:T.green,cancelado:T.inkMid};
+
+  if(loading)return<Spinner/>;
+  return(
+    <div>
+      <div style={{fontSize:13,color:T.inkMid,marginBottom:16}}>
+        {lista.filter(e=>e.status==="pendente").length} encaminhamento(s) pendente(s)
+      </div>
+      {lista.length===0?(
+        <Card style={{padding:"40px",textAlign:"center",color:T.inkFaint}}>
+          <div style={{fontSize:32,marginBottom:8}}>🏨</div>
+          <div>Nenhum encaminhamento eletivo</div>
+        </Card>
+      ):(
+        <div style={{display:"flex",flexDirection:"column",gap:8}}>
+          {lista.map(enc=>{
+            const aberto=expandido===enc.id;
+            return(
+              <Card key={enc.id} style={{padding:"0",overflow:"hidden",borderLeft:`3px solid ${STATUS_COR[enc.status]||T.border}`}}>
+                <div style={{padding:"14px 18px",display:"flex",alignItems:"flex-start",gap:14,cursor:"pointer"}} onClick={()=>setExpandido(aberto?null:enc.id)}>
+                  <div style={{flex:1}}>
+                    <div style={{display:"flex",alignItems:"center",gap:8,marginBottom:4}}>
+                      <div style={{fontSize:14,fontWeight:500,color:T.ink}}>{enc.pacientes?.nome||"—"}</div>
+                      <Badge label={enc.status.replace("_"," ")} color={STATUS_COR[enc.status]||T.inkMid}/>
+                      {enc.especialidade&&<Badge label={enc.especialidade} color={T.blue} bg={T.blueBg}/>}
+                    </div>
+                    <div style={{fontSize:12,color:T.inkMid}}>
+                      Médico: {enc.medicos?.nome||"—"} · {new Date(enc.created_at).toLocaleString("pt-BR",{day:"numeric",month:"short"})}
+                      {enc.motivo&&<span> · {enc.motivo}</span>}
+                    </div>
+                    {enc.data_agendada&&<div style={{fontSize:12,color:T.blue,marginTop:2}}>📅 Agendado: {enc.data_agendada} {enc.hora_agendada&&enc.hora_agendada.slice(0,5)} — {enc.unidade_texto||"—"}</div>}
+                    {enc.consulta_realizada&&<div style={{fontSize:12,color:T.green,marginTop:2}}>✓ Realizada em {enc.data_consulta_realizada}</div>}
+                    {enc.retorno_medico_pessoal&&<div style={{fontSize:12,color:T.green,marginTop:2}}>✓ Retorno ao médico em {enc.data_retorno_medico||"—"}</div>}
+                  </div>
+                  <span style={{fontSize:12,color:T.inkFaint}}>{aberto?"▲":"▼"}</span>
+                </div>
+                {aberto&&(
+                  <div style={{borderTop:`0.5px solid ${T.border}`,padding:"16px 18px",background:T.bgWarm}}>
+                    <div style={{display:"grid",gridTemplateColumns:"1fr 1fr 1fr",gap:12,marginBottom:12}}>
+                      <div>
+                        <div style={{fontSize:10,color:T.inkFaint,letterSpacing:"0.08em",marginBottom:5}}>TENTATIVA DE CONTATO</div>
+                        <input type="datetime-local" defaultValue={enc.hora_tentativa_contato?.slice(0,16)||""}
+                          onBlur={e=>atualizar(enc.id,{hora_tentativa_contato:e.target.value||null,tentativas_contato:(enc.tentativas_contato||0)+1})}
+                          style={{width:"100%",padding:"7px 10px",border:`1px solid ${T.border}`,borderRadius:8,fontFamily:T.f,fontSize:12}}/>
+                      </div>
+                      <div>
+                        <div style={{fontSize:10,color:T.inkFaint,letterSpacing:"0.08em",marginBottom:5}}>CONTATO REALIZADO</div>
+                        <input type="datetime-local" defaultValue={enc.hora_contato_realizado?.slice(0,16)||""}
+                          onBlur={e=>atualizar(enc.id,{hora_contato_realizado:e.target.value||null,status:e.target.value?"contato_realizado":enc.status})}
+                          style={{width:"100%",padding:"7px 10px",border:`1px solid ${T.border}`,borderRadius:8,fontFamily:T.f,fontSize:12}}/>
+                      </div>
+                      <div>
+                        <div style={{fontSize:10,color:T.inkFaint,letterSpacing:"0.08em",marginBottom:5}}>Nº TENTATIVAS</div>
+                        <div style={{fontSize:20,fontWeight:700,color:T.ink,padding:"7px 0"}}>{enc.tentativas_contato||0}</div>
+                      </div>
+                    </div>
+                    <div style={{display:"grid",gridTemplateColumns:"2fr 1fr 1fr",gap:12,marginBottom:12}}>
+                      <div>
+                        <div style={{fontSize:10,color:T.inkFaint,letterSpacing:"0.08em",marginBottom:5}}>LOCAL COMBINADO</div>
+                        <input defaultValue={enc.unidade_texto||""} placeholder="Nome da unidade / endereço"
+                          onBlur={e=>atualizar(enc.id,{unidade_texto:e.target.value})}
+                          style={{width:"100%",padding:"7px 10px",border:`1px solid ${T.border}`,borderRadius:8,fontFamily:T.f,fontSize:12}}/>
+                      </div>
+                      <div>
+                        <div style={{fontSize:10,color:T.inkFaint,letterSpacing:"0.08em",marginBottom:5}}>DATA</div>
+                        <input type="date" defaultValue={enc.data_agendada||""}
+                          onBlur={e=>atualizar(enc.id,{data_agendada:e.target.value||null,status:"agendado"})}
+                          style={{width:"100%",padding:"7px 10px",border:`1px solid ${T.border}`,borderRadius:8,fontFamily:T.f,fontSize:12}}/>
+                      </div>
+                      <div>
+                        <div style={{fontSize:10,color:T.inkFaint,letterSpacing:"0.08em",marginBottom:5}}>HORA</div>
+                        <input type="time" defaultValue={enc.hora_agendada?.slice(0,5)||""}
+                          onBlur={e=>atualizar(enc.id,{hora_agendada:e.target.value||null})}
+                          style={{width:"100%",padding:"7px 10px",border:`1px solid ${T.border}`,borderRadius:8,fontFamily:T.f,fontSize:12}}/>
+                      </div>
+                    </div>
+                    <div style={{display:"flex",gap:10,flexWrap:"wrap"}}>
+                      <button onClick={()=>atualizar(enc.id,{consulta_realizada:!enc.consulta_realizada,data_consulta_realizada:enc.consulta_realizada?null:dataHoje(),status:enc.consulta_realizada?"agendado":"realizado"})}
+                        style={{padding:"7px 14px",borderRadius:8,border:`1px solid ${enc.consulta_realizada?T.green:T.border}`,background:enc.consulta_realizada?T.greenBg:T.surface,color:enc.consulta_realizada?T.green:T.inkMid,fontSize:12,cursor:"pointer",fontFamily:T.f}}>
+                        {enc.consulta_realizada?"✓ Consulta realizada":"Marcar como realizada"}
+                      </button>
+                      {enc.consulta_realizada&&(
+                        <button onClick={()=>atualizar(enc.id,{retorno_medico_pessoal:!enc.retorno_medico_pessoal,data_retorno_medico:enc.retorno_medico_pessoal?null:dataHoje()})}
+                          style={{padding:"7px 14px",borderRadius:8,border:`1px solid ${enc.retorno_medico_pessoal?T.green:T.border}`,background:enc.retorno_medico_pessoal?T.greenBg:T.surface,color:enc.retorno_medico_pessoal?T.green:T.inkMid,fontSize:12,cursor:"pointer",fontFamily:T.f}}>
+                          {enc.retorno_medico_pessoal?"✓ Retorno ao médico registrado":"Registrar retorno ao médico pessoal"}
+                        </button>
+                      )}
+                    </div>
+                  </div>
+                )}
+              </Card>
+            );
+          })}
+        </div>
+      )}
+    </div>
+  );
+}
+
+// ─── Aba Exames Admin ─────────────────────────────────────────────
+function AbaExamesAdmin(){
+  const[lista,setLista]=useState([]);
+  const[loading,setLoading]=useState(true);
+  const[expandido,setExpandido]=useState(null);
+
+  useEffect(()=>{
+    supabase.from("exames_acompanhamento")
+      .select("*,pacientes(nome),medicos(nome),documentos(titulo,conteudo_json)")
+      .order("created_at",{ascending:false})
+      .then(({data})=>{setLista(data||[]);setLoading(false);});
+  },[]);
+
+  const atualizar=async(id,campos)=>{
+    await supabase.from("exames_acompanhamento").update({...campos,updated_at:new Date().toISOString()}).eq("id",id);
+    const{data}=await supabase.from("exames_acompanhamento").select("*,pacientes(nome),medicos(nome),documentos(titulo,conteudo_json)").order("created_at",{ascending:false});
+    setLista(data||[]);
+  };
+
+  const STATUS_COR={pendente:T.orange,contato_realizado:T.blue,agendado:T.blue,realizado:T.green,resultado_recebido:T.green,cancelado:T.inkMid};
+
+  if(loading)return<Spinner/>;
+  return(
+    <div>
+      <div style={{fontSize:13,color:T.inkMid,marginBottom:16}}>
+        {lista.filter(e=>e.status==="pendente").length} pedido(s) pendente(s) de agendamento
+      </div>
+      {lista.length===0?(
+        <Card style={{padding:"40px",textAlign:"center",color:T.inkFaint}}>
+          <div style={{fontSize:32,marginBottom:8}}>🔬</div>
+          <div>Nenhum pedido de exame para acompanhar</div>
+          <div style={{fontSize:12,color:T.inkFaint,marginTop:6}}>Os exames aparecem aqui quando o médico emite um pedido no app</div>
+        </Card>
+      ):(
+        <div style={{display:"flex",flexDirection:"column",gap:8}}>
+          {lista.map(ex=>{
+            const aberto=expandido===ex.id;
+            const doc=ex.documentos;
+            const conteudo=doc?.conteudo_json?(typeof doc.conteudo_json==="string"?JSON.parse(doc.conteudo_json):doc.conteudo_json):null;
+            const examesLista=conteudo?.exames||[];
+            return(
+              <Card key={ex.id} style={{padding:"0",overflow:"hidden",borderLeft:`3px solid ${STATUS_COR[ex.status]||T.border}`}}>
+                <div style={{padding:"14px 18px",display:"flex",alignItems:"flex-start",gap:14,cursor:"pointer"}} onClick={()=>setExpandido(aberto?null:ex.id)}>
+                  <div style={{flex:1}}>
+                    <div style={{display:"flex",alignItems:"center",gap:8,marginBottom:4}}>
+                      <div style={{fontSize:14,fontWeight:500,color:T.ink}}>{ex.pacientes?.nome||"—"}</div>
+                      <Badge label={ex.status.replace(/_/g," ")} color={STATUS_COR[ex.status]||T.inkMid}/>
+                    </div>
+                    <div style={{fontSize:12,color:T.inkMid}}>
+                      Médico: {ex.medicos?.nome||"—"} · {new Date(ex.created_at).toLocaleString("pt-BR",{day:"numeric",month:"short"})}
+                    </div>
+                    {examesLista.length>0&&(
+                      <div style={{display:"flex",gap:6,flexWrap:"wrap",marginTop:4}}>
+                        {examesLista.map((e,i)=><Badge key={i} label={e.nome} color={T.purple} bg={T.purpleBg}/>)}
+                      </div>
+                    )}
+                    {ex.data_agendada&&<div style={{fontSize:12,color:T.blue,marginTop:2}}>📅 {ex.data_agendada} {ex.hora_agendada&&ex.hora_agendada.slice(0,5)} — {ex.unidade_texto||"—"}</div>}
+                  </div>
+                  <span style={{fontSize:12,color:T.inkFaint}}>{aberto?"▲":"▼"}</span>
+                </div>
+                {aberto&&(
+                  <div style={{borderTop:`0.5px solid ${T.border}`,padding:"16px 18px",background:T.bgWarm}}>
+                    <div style={{display:"grid",gridTemplateColumns:"1fr 1fr 1fr",gap:12,marginBottom:12}}>
+                      <div>
+                        <div style={{fontSize:10,color:T.inkFaint,letterSpacing:"0.08em",marginBottom:5}}>TENTATIVA DE CONTATO</div>
+                        <input type="datetime-local" defaultValue={ex.hora_tentativa_contato?.slice(0,16)||""}
+                          onBlur={e=>atualizar(ex.id,{hora_tentativa_contato:e.target.value||null,tentativas_contato:(ex.tentativas_contato||0)+1})}
+                          style={{width:"100%",padding:"7px 10px",border:`1px solid ${T.border}`,borderRadius:8,fontFamily:T.f,fontSize:12}}/>
+                      </div>
+                      <div>
+                        <div style={{fontSize:10,color:T.inkFaint,letterSpacing:"0.08em",marginBottom:5}}>CONTATO REALIZADO</div>
+                        <input type="datetime-local" defaultValue={ex.hora_contato_realizado?.slice(0,16)||""}
+                          onBlur={e=>atualizar(ex.id,{hora_contato_realizado:e.target.value||null,status:e.target.value?"contato_realizado":ex.status})}
+                          style={{width:"100%",padding:"7px 10px",border:`1px solid ${T.border}`,borderRadius:8,fontFamily:T.f,fontSize:12}}/>
+                      </div>
+                      <div>
+                        <div style={{fontSize:10,color:T.inkFaint,letterSpacing:"0.08em",marginBottom:5}}>Nº TENTATIVAS</div>
+                        <div style={{fontSize:20,fontWeight:700,color:T.ink,padding:"7px 0"}}>{ex.tentativas_contato||0}</div>
+                      </div>
+                    </div>
+                    <div style={{display:"grid",gridTemplateColumns:"2fr 1fr 1fr",gap:12,marginBottom:12}}>
+                      <div>
+                        <div style={{fontSize:10,color:T.inkFaint,letterSpacing:"0.08em",marginBottom:5}}>LOCAL / LABORATÓRIO</div>
+                        <input defaultValue={ex.unidade_texto||""} placeholder="Nome do laboratório / clínica"
+                          onBlur={e=>atualizar(ex.id,{unidade_texto:e.target.value,status:"agendado"})}
+                          style={{width:"100%",padding:"7px 10px",border:`1px solid ${T.border}`,borderRadius:8,fontFamily:T.f,fontSize:12}}/>
+                      </div>
+                      <div>
+                        <div style={{fontSize:10,color:T.inkFaint,letterSpacing:"0.08em",marginBottom:5}}>DATA</div>
+                        <input type="date" defaultValue={ex.data_agendada||""}
+                          onBlur={e=>atualizar(ex.id,{data_agendada:e.target.value||null})}
+                          style={{width:"100%",padding:"7px 10px",border:`1px solid ${T.border}`,borderRadius:8,fontFamily:T.f,fontSize:12}}/>
+                      </div>
+                      <div>
+                        <div style={{fontSize:10,color:T.inkFaint,letterSpacing:"0.08em",marginBottom:5}}>HORA</div>
+                        <input type="time" defaultValue={ex.hora_agendada?.slice(0,5)||""}
+                          onBlur={e=>atualizar(ex.id,{hora_agendada:e.target.value||null})}
+                          style={{width:"100%",padding:"7px 10px",border:`1px solid ${T.border}`,borderRadius:8,fontFamily:T.f,fontSize:12}}/>
+                      </div>
+                    </div>
+                    <div style={{display:"flex",gap:10,flexWrap:"wrap"}}>
+                      <button onClick={()=>atualizar(ex.id,{realizado:!ex.realizado,data_realizado:ex.realizado?null:dataHoje(),status:ex.realizado?"agendado":"realizado"})}
+                        style={{padding:"7px 14px",borderRadius:8,border:`1px solid ${ex.realizado?T.green:T.border}`,background:ex.realizado?T.greenBg:T.surface,color:ex.realizado?T.green:T.inkMid,fontSize:12,cursor:"pointer",fontFamily:T.f}}>
+                        {ex.realizado?"✓ Exame realizado":"Marcar como realizado"}
+                      </button>
+                      {ex.realizado&&(
+                        <button onClick={()=>atualizar(ex.id,{resultado_recebido:!ex.resultado_recebido,status:ex.resultado_recebido?"realizado":"resultado_recebido"})}
+                          style={{padding:"7px 14px",borderRadius:8,border:`1px solid ${ex.resultado_recebido?T.green:T.border}`,background:ex.resultado_recebido?T.greenBg:T.surface,color:ex.resultado_recebido?T.green:T.inkMid,fontSize:12,cursor:"pointer",fontFamily:T.f}}>
+                          {ex.resultado_recebido?"✓ Resultado recebido":"Registrar resultado recebido"}
+                        </button>
+                      )}
+                      {ex.resultado_recebido&&(
+                        <button onClick={()=>atualizar(ex.id,{retorno_medico:!ex.retorno_medico})}
+                          style={{padding:"7px 14px",borderRadius:8,border:`1px solid ${ex.retorno_medico?T.green:T.border}`,background:ex.retorno_medico?T.greenBg:T.surface,color:ex.retorno_medico?T.green:T.inkMid,fontSize:12,cursor:"pointer",fontFamily:T.f}}>
+                          {ex.retorno_medico?"✓ Retorno ao médico":"Registrar retorno ao médico"}
+                        </button>
+                      )}
+                    </div>
+                  </div>
+                )}
+              </Card>
+            );
+          })}
+        </div>
+      )}
+    </div>
+  );
+}
+
+// ─── Aba Mensagens Admin ──────────────────────────────────────────
+function AbaMensagensAdmin(){
+  const[pacientes,setPacientes]=useState([]);
+  const[pacSel,setPacSel]=useState("");
+  const[medico,setMedico]=useState(null);
+  const[msgsMedico,setMsgsMedico]=useState([]);
+  const[msgsPaciente,setMsgsPaciente]=useState([]);
+  const[inputMedico,setInputMedico]=useState("");
+  const[inputPaciente,setInputPaciente]=useState("");
+  const[loading,setLoading]=useState(true);
+  const bottomMedicoRef=useRef(null);
+  const bottomPacienteRef=useRef(null);
+
+  useEffect(()=>{
+    supabase.from("pacientes").select("id,nome,medico_id,medicos(id,nome)").order("nome")
+      .then(({data})=>{setPacientes(data||[]);setLoading(false);});
+  },[]);
+
+  useEffect(()=>{
+    if(!pacSel)return;
+    const pac=pacientes.find(p=>p.id===pacSel);
+    setMedico(pac?.medicos||null);
+    // Carregar mensagens
+    Promise.all([
+      supabase.from("mensagens_admin").select("*").eq("paciente_id",pacSel).eq("destinatario_tipo","medico").order("created_at"),
+      supabase.from("mensagens_admin").select("*").eq("paciente_id",pacSel).eq("destinatario_tipo","paciente").order("created_at"),
+    ]).then(([{data:m},{data:p}])=>{setMsgsMedico(m||[]);setMsgsPaciente(p||[]);});
+  },[pacSel]);
+
+  useEffect(()=>{bottomMedicoRef.current?.scrollIntoView({behavior:"smooth"});},[msgsMedico]);
+  useEffect(()=>{bottomPacienteRef.current?.scrollIntoView({behavior:"smooth"});},[msgsPaciente]);
+
+  const enviarMensagem=async(tipo,conteudo,setter,setInput)=>{
+    if(!conteudo.trim()||!pacSel)return;
+    const pac=pacientes.find(p=>p.id===pacSel);
+    const destId=tipo==="medico"?pac?.medico_id:pacSel;
+    if(!destId)return;
+    await supabase.from("mensagens_admin").insert({
+      paciente_id:pacSel,
+      destinatario_tipo:tipo,
+      destinatario_id:destId,
+      remetente_tipo:"admin",
+      remetente_id:"00000000-0000-0000-0000-000000000000", // admin fixo por ora
+      conteudo:conteudo.trim(),
+    });
+    setInput("");
+    const{data}=await supabase.from("mensagens_admin").select("*").eq("paciente_id",pacSel).eq("destinatario_tipo",tipo).order("created_at");
+    setter(data||[]);
+  };
+
+  const ChatBox=({titulo,msgs,input,setInput,onEnviar,bottomRef})=>(
+    <div style={{flex:1,display:"flex",flexDirection:"column",border:`0.5px solid ${T.border}`,borderRadius:10,overflow:"hidden"}}>
+      <div style={{padding:"12px 16px",borderBottom:`0.5px solid ${T.border}`,background:T.bgWarm,fontSize:13,fontWeight:500,color:T.ink}}>{titulo}</div>
+      <div style={{flex:1,overflowY:"auto",padding:"12px 16px",minHeight:200,maxHeight:320,display:"flex",flexDirection:"column",gap:8}}>
+        {msgs.length===0&&<div style={{fontSize:12,color:T.inkFaint,textAlign:"center",paddingTop:20}}>Nenhuma mensagem ainda</div>}
+        {msgs.map(m=>(
+          <div key={m.id} style={{display:"flex",justifyContent:m.remetente_tipo==="admin"?"flex-end":"flex-start"}}>
+            <div style={{maxWidth:"75%",padding:"8px 12px",borderRadius:10,fontSize:12,lineHeight:1.5,
+              background:m.remetente_tipo==="admin"?T.green:T.bgWarm,
+              color:m.remetente_tipo==="admin"?"#FFF":T.ink}}>
+              {m.conteudo}
+              <div style={{fontSize:9,opacity:0.7,marginTop:2,textAlign:"right"}}>
+                {new Date(m.created_at).toLocaleTimeString("pt-BR",{hour:"2-digit",minute:"2-digit"})}
+              </div>
+            </div>
+          </div>
+        ))}
+        <div ref={bottomRef}/>
+      </div>
+      <div style={{padding:"10px 12px",borderTop:`0.5px solid ${T.border}`,display:"flex",gap:8}}>
+        <input value={input} onChange={e=>setInput(e.target.value)}
+          onKeyDown={e=>e.key==="Enter"&&!e.shiftKey&&onEnviar()}
+          placeholder="Digite sua mensagem..."
+          style={{flex:1,padding:"8px 12px",border:`1px solid ${T.border}`,borderRadius:8,fontFamily:T.f,fontSize:13,outline:"none"}}/>
+        <Btn small onClick={onEnviar} disabled={!input.trim()}>Enviar</Btn>
+      </div>
+    </div>
+  );
+
+  if(loading)return<Spinner/>;
+  return(
+    <div>
+      <div style={{marginBottom:16}}>
+        <Select label="SELECIONAR PACIENTE" value={pacSel} onChange={setPacSel}
+          options={[{value:"",label:"Selecionar paciente..."},...pacientes.map(p=>({value:p.id,label:p.nome}))]}/>
+      </div>
+      {!pacSel?(
+        <Card style={{padding:"40px",textAlign:"center",color:T.inkFaint}}>
+          <div style={{fontSize:32,marginBottom:8}}>💬</div>
+          <div>Selecione um paciente para ver as mensagens</div>
+        </Card>
+      ):(
+        <div style={{display:"grid",gridTemplateColumns:"1fr 1fr",gap:16}}>
+          <ChatBox
+            titulo={"💬 Médico — "+(medico?.nome||"—")}
+            msgs={msgsMedico}
+            input={inputMedico}
+            setInput={setInputMedico}
+            onEnviar={()=>enviarMensagem("medico",inputMedico,setMsgsMedico,setInputMedico)}
+            bottomRef={bottomMedicoRef}/>
+          <ChatBox
+            titulo={"💬 Paciente — "+(pacientes.find(p=>p.id===pacSel)?.nome||"—")}
+            msgs={msgsPaciente}
+            input={inputPaciente}
+            setInput={setInputPaciente}
+            onEnviar={()=>enviarMensagem("paciente",inputPaciente,setMsgsPaciente,setInputPaciente)}
+            bottomRef={bottomPacienteRef}/>
+        </div>
+      )}
     </div>
   );
 }
