@@ -1369,46 +1369,331 @@ function FormEtapa({episodioId,duracaoMeses,apiKey,onSalvo,onCancelar}){
 function TelaMedicos(){
   const[medicos,setMedicos]=useState([]);
   const[loading,setLoading]=useState(true);
+  const[modalAberto,setModalAberto]=useState(false);
+  const[salvando,setSalvando]=useState(false);
+  const[sucesso,setSucesso]=useState(false);
+  const[erro,setErro]=useState("");
+  const[editando,setEditando]=useState(null);
+
+  // Campos do formulário
+  const[nome,setNome]=useState("");
+  const[email,setEmail]=useState("");
+  const[crm,setCrm]=useState("");
+  const[especialidade,setEspecialidade]=useState("Medicina de Família e Comunidade");
+  const[telefone,setTelefone]=useState("");
+  const[senha,setSenha]=useState("");
+  const[criarLogin,setCriarLogin]=useState(true);
+
+  const especialidades=[
+    "Medicina de Família e Comunidade",
+    "Clínica Médica",
+    "Cardiologia",
+    "Endocrinologia",
+    "Ortopedia",
+    "Psiquiatria",
+    "Ginecologia",
+    "Pediatria",
+    "Neurologia",
+    "Reumatologia",
+    "Outra",
+  ];
 
   useEffect(()=>{
-    carregarMedicosDetalhes().then(m=>{setMedicos(m);setLoading(false);});
+    carregarMedicos();
   },[]);
+
+  const carregarMedicos=()=>{
+    setLoading(true);
+    carregarMedicosDetalhes().then(m=>{setMedicos(m);setLoading(false);});
+  };
+
+  const abrirModal=(med=null)=>{
+    if(med){
+      setEditando(med);
+      setNome(med.nome||"");
+      setEmail(med.email||"");
+      setCrm(med.crm||"");
+      setEspecialidade(med.especialidade||"Medicina de Família e Comunidade");
+      setTelefone(med.telefone||"");
+      setSenha("");
+      setCriarLogin(false);
+    } else {
+      setEditando(null);
+      setNome("");setEmail("");setCrm("");
+      setEspecialidade("Medicina de Família e Comunidade");
+      setTelefone("");setSenha("");setCriarLogin(true);
+    }
+    setErro("");setSucesso(false);
+    setModalAberto(true);
+  };
+
+  const fecharModal=()=>{
+    setModalAberto(false);
+    setEditando(null);
+    setErro("");setSucesso(false);
+  };
+
+  const salvar=async()=>{
+    if(!nome.trim()||!email.trim()||!crm.trim()){
+      setErro("Nome, e-mail e CRM são obrigatórios.");
+      return;
+    }
+    setSalvando(true);setErro("");
+
+    try{
+      if(editando){
+        // Atualizar médico existente
+        const{error}=await supabase.from("medicos").update({
+          nome:nome.trim(),email:email.trim(),crm:crm.trim(),
+          especialidade,telefone:telefone.trim(),
+        }).eq("id",editando.id);
+        if(error)throw error;
+      } else {
+        // Criar novo médico
+        let userId=null;
+
+        if(criarLogin&&senha.length>=6){
+          // Criar usuário no Auth
+          const{data:authData,error:authErr}=await supabase.auth.admin
+            ? await supabase.auth.signUp({email:email.trim(),password:senha,options:{data:{name:nome.trim(),role:"medico"}}})
+            : {data:null,error:{message:"Admin API não disponível — crie o login manualmente"}};
+
+          if(authErr&&!authErr.message.includes("Admin")){
+            // Tentar criar via signUp normal
+            const{data:sd}=await supabase.auth.signUp({
+              email:email.trim(),password:senha,
+              options:{data:{name:nome.trim(),role:"medico"}}
+            });
+            userId=sd?.user?.id||null;
+          } else {
+            userId=authData?.user?.id||null;
+          }
+        }
+
+        const{error}=await supabase.from("medicos").insert({
+          nome:nome.trim(),email:email.trim(),crm:crm.trim(),
+          especialidade,telefone:telefone.trim(),
+          user_id:userId,
+          ativo:true,
+        });
+        if(error)throw error;
+      }
+
+      setSucesso(true);
+      carregarMedicos();
+      setTimeout(fecharModal,1500);
+    }catch(e){
+      setErro(e.message||"Erro ao salvar médico.");
+    }finally{
+      setSalvando(false);
+    }
+  };
+
+  const inativar=async(id)=>{
+    if(!window.confirm("Inativar este médico? Ele não poderá acessar o sistema."))return;
+    await supabase.from("medicos").update({ativo:false}).eq("id",id);
+    carregarMedicos();
+  };
 
   if(loading)return<Spinner/>;
 
   return(
     <div style={{padding:"28px",maxWidth:1000,margin:"0 auto"}}>
-      <div style={{fontSize:22,fontWeight:600,color:T.ink,marginBottom:24}}>Médicos</div>
+
+      {/* Header */}
+      <div style={{display:"flex",alignItems:"center",justifyContent:"space-between",marginBottom:24}}>
+        <div>
+          <div style={{fontSize:22,fontWeight:600,color:T.ink}}>Médicos</div>
+          <div style={{fontSize:13,color:T.inkMid,marginTop:2}}>{medicos.length} médico{medicos.length!==1?"s":""} cadastrado{medicos.length!==1?"s":""}</div>
+        </div>
+        <button onClick={()=>abrirModal()}
+          style={{padding:"10px 20px",background:T.green,color:"#FFF",border:"none",borderRadius:8,
+            fontSize:13,fontWeight:500,cursor:"pointer",fontFamily:T.f,display:"flex",alignItems:"center",gap:6}}>
+          + Cadastrar médico
+        </button>
+      </div>
+
+      {/* Lista */}
       <Card style={{padding:"0",overflow:"hidden"}}>
         {medicos.length===0?(
-          <div style={{padding:"48px",textAlign:"center",color:T.inkFaint}}>
-            <div style={{fontSize:32,marginBottom:12}}>👨‍⚕️</div>
-            <div>Nenhum médico cadastrado</div>
+          <div style={{padding:"60px",textAlign:"center",color:T.inkFaint}}>
+            <div style={{fontSize:40,marginBottom:12}}>👨‍⚕️</div>
+            <div style={{fontSize:15,fontWeight:500,marginBottom:6,color:T.ink}}>Nenhum médico cadastrado</div>
+            <div style={{fontSize:13,marginBottom:20}}>Cadastre o primeiro médico para começar o piloto</div>
+            <button onClick={()=>abrirModal()}
+              style={{padding:"10px 24px",background:T.green,color:"#FFF",border:"none",borderRadius:8,
+                fontSize:13,fontWeight:500,cursor:"pointer",fontFamily:T.f}}>
+              + Cadastrar primeiro médico
+            </button>
           </div>
         ):(
-          medicos.map(m=>(
-            <div key={m.id} style={{padding:"16px 20px",borderBottom:`0.5px solid ${T.border}`,display:"flex",alignItems:"center",gap:14}}>
-              <div style={{width:40,height:40,borderRadius:10,background:T.greenBg,display:"flex",alignItems:"center",justifyContent:"center",fontSize:18,flexShrink:0}}>
-                👨‍⚕️
-              </div>
-              <div style={{flex:1}}>
-                <div style={{fontSize:14,fontWeight:500,color:T.ink,marginBottom:2}}>{m.nome}</div>
-                <div style={{fontSize:12,color:T.inkMid}}>{m.especialidade||"—"} · CRM {m.crm||"—"} · {m.email}</div>
-              </div>
-              <div style={{display:"flex",gap:10,alignItems:"center"}}>
-                <div style={{textAlign:"center"}}>
-                  <div style={{fontSize:16,fontWeight:700,color:T.blue}}>{m.totalPacientes}</div>
-                  <div style={{fontSize:10,color:T.inkFaint}}>pacientes</div>
-                </div>
-                <div style={{textAlign:"center"}}>
-                  <div style={{fontSize:16,fontWeight:700,color:T.green}}>{m.totalConsultas}</div>
-                  <div style={{fontSize:10,color:T.inkFaint}}>consultas</div>
-                </div>
-              </div>
+          <>
+            {/* Cabeçalho */}
+            <div style={{display:"grid",gridTemplateColumns:"2fr 1fr 1fr 80px 80px 100px",
+              padding:"10px 20px",background:T.bgWarm,borderBottom:"0.5px solid "+T.border,
+              fontSize:10,color:T.inkFaint,fontWeight:500,letterSpacing:"0.08em"}}>
+              <div>MÉDICO</div><div>ESPECIALIDADE</div><div>CRM</div>
+              <div style={{textAlign:"center"}}>PACIENTES</div>
+              <div style={{textAlign:"center"}}>CONSULTAS</div>
+              <div></div>
             </div>
-          ))
+            {medicos.map(m=>(
+              <div key={m.id} style={{display:"grid",gridTemplateColumns:"2fr 1fr 1fr 80px 80px 100px",
+                padding:"14px 20px",borderBottom:"0.5px solid "+T.border,alignItems:"center",
+                transition:"background 0.1s"}}
+                onMouseOver={e=>e.currentTarget.style.background=T.bgWarm}
+                onMouseOut={e=>e.currentTarget.style.background="transparent"}>
+                <div style={{display:"flex",alignItems:"center",gap:10}}>
+                  <div style={{width:36,height:36,borderRadius:10,background:T.greenBg,
+                    display:"flex",alignItems:"center",justifyContent:"center",fontSize:16,flexShrink:0}}>
+                    👨‍⚕️
+                  </div>
+                  <div>
+                    <div style={{fontSize:13,fontWeight:500,color:T.ink}}>{m.nome}</div>
+                    <div style={{fontSize:11,color:T.inkMid}}>{m.email}</div>
+                  </div>
+                </div>
+                <div style={{fontSize:12,color:T.inkMid}}>{m.especialidade||"—"}</div>
+                <div style={{fontSize:12,color:T.inkMid,fontFamily:"monospace"}}>CRM {m.crm||"—"}</div>
+                <div style={{textAlign:"center"}}>
+                  <div style={{fontSize:16,fontWeight:600,color:T.blue}}>{m.totalPacientes||0}</div>
+                </div>
+                <div style={{textAlign:"center"}}>
+                  <div style={{fontSize:16,fontWeight:600,color:T.green}}>{m.totalConsultas||0}</div>
+                </div>
+                <div style={{display:"flex",gap:6,justifyContent:"flex-end"}}>
+                  <button onClick={()=>abrirModal(m)}
+                    style={{padding:"5px 12px",borderRadius:6,border:"0.5px solid "+T.border,
+                      background:T.surface,fontSize:12,cursor:"pointer",fontFamily:T.f,color:T.ink}}>
+                    Editar
+                  </button>
+                  <button onClick={()=>inativar(m.id)}
+                    style={{padding:"5px 10px",borderRadius:6,border:"0.5px solid "+T.border,
+                      background:T.surface,fontSize:12,cursor:"pointer",fontFamily:T.f,color:T.inkMid}}>
+                    ✕
+                  </button>
+                </div>
+              </div>
+            ))}
+          </>
         )}
       </Card>
+
+      {/* Modal */}
+      {modalAberto&&(
+        <div style={{position:"fixed",inset:0,background:"rgba(0,0,0,0.4)",display:"flex",
+          alignItems:"center",justifyContent:"center",zIndex:1000,padding:24}}>
+          <div style={{background:T.surface,borderRadius:16,padding:"32px",maxWidth:480,
+            width:"100%",boxShadow:"0 12px 40px rgba(0,0,0,0.15)",maxHeight:"90vh",overflowY:"auto"}}>
+
+            <div style={{fontSize:18,fontWeight:600,color:T.ink,marginBottom:4}}>
+              {editando?"Editar médico":"Cadastrar novo médico"}
+            </div>
+            <div style={{fontSize:13,color:T.inkMid,marginBottom:24}}>
+              {editando?"Atualize os dados do médico":"Preencha os dados para criar o perfil do médico na plataforma"}
+            </div>
+
+            {sucesso?(
+              <div style={{textAlign:"center",padding:"20px 0"}}>
+                <div style={{fontSize:40,marginBottom:12}}>✅</div>
+                <div style={{fontSize:16,fontWeight:500,color:T.green}}>
+                  {editando?"Médico atualizado!":"Médico cadastrado com sucesso!"}
+                </div>
+              </div>
+            ):(
+              <>
+                {/* Nome */}
+                <div style={{marginBottom:14}}>
+                  <div style={{fontSize:11,fontWeight:500,color:T.inkMid,marginBottom:5}}>NOME COMPLETO *</div>
+                  <input value={nome} onChange={e=>setNome(e.target.value)}
+                    placeholder="Dr(a). Nome Sobrenome"
+                    style={{width:"100%",padding:"10px 12px",border:"0.5px solid "+T.border,borderRadius:8,
+                      fontFamily:T.f,fontSize:13,color:T.ink,outline:"none"}}/>
+                </div>
+
+                {/* Email */}
+                <div style={{marginBottom:14}}>
+                  <div style={{fontSize:11,fontWeight:500,color:T.inkMid,marginBottom:5}}>E-MAIL *</div>
+                  <input type="email" value={email} onChange={e=>setEmail(e.target.value)}
+                    placeholder="medico@exemplo.com"
+                    style={{width:"100%",padding:"10px 12px",border:"0.5px solid "+T.border,borderRadius:8,
+                      fontFamily:T.f,fontSize:13,color:T.ink,outline:"none"}}/>
+                </div>
+
+                {/* CRM e Especialidade */}
+                <div style={{display:"grid",gridTemplateColumns:"1fr 1fr",gap:10,marginBottom:14}}>
+                  <div>
+                    <div style={{fontSize:11,fontWeight:500,color:T.inkMid,marginBottom:5}}>CRM *</div>
+                    <input value={crm} onChange={e=>setCrm(e.target.value)}
+                      placeholder="123456/SP"
+                      style={{width:"100%",padding:"10px 12px",border:"0.5px solid "+T.border,borderRadius:8,
+                        fontFamily:T.f,fontSize:13,color:T.ink,outline:"none"}}/>
+                  </div>
+                  <div>
+                    <div style={{fontSize:11,fontWeight:500,color:T.inkMid,marginBottom:5}}>TELEFONE</div>
+                    <input value={telefone} onChange={e=>setTelefone(e.target.value)}
+                      placeholder="(11) 99999-9999"
+                      style={{width:"100%",padding:"10px 12px",border:"0.5px solid "+T.border,borderRadius:8,
+                        fontFamily:T.f,fontSize:13,color:T.ink,outline:"none"}}/>
+                  </div>
+                </div>
+
+                {/* Especialidade */}
+                <div style={{marginBottom:14}}>
+                  <div style={{fontSize:11,fontWeight:500,color:T.inkMid,marginBottom:5}}>ESPECIALIDADE *</div>
+                  <select value={especialidade} onChange={e=>setEspecialidade(e.target.value)}
+                    style={{width:"100%",padding:"10px 12px",border:"0.5px solid "+T.border,borderRadius:8,
+                      fontFamily:T.f,fontSize:13,color:T.ink,outline:"none",background:T.surface}}>
+                    {especialidades.map(e=><option key={e}>{e}</option>)}
+                  </select>
+                </div>
+
+                {/* Criar login */}
+                {!editando&&(
+                  <div style={{marginBottom:14}}>
+                    <div style={{display:"flex",alignItems:"center",gap:8,marginBottom:10}}>
+                      <input type="checkbox" checked={criarLogin} onChange={e=>setCriarLogin(e.target.checked)}
+                        style={{accentColor:T.green,width:15,height:15}}/>
+                      <div style={{fontSize:13,color:T.ink}}>Criar login de acesso ao app médico</div>
+                    </div>
+                    {criarLogin&&(
+                      <div>
+                        <div style={{fontSize:11,fontWeight:500,color:T.inkMid,marginBottom:5}}>SENHA PROVISÓRIA (mín. 6 caracteres)</div>
+                        <input type="password" value={senha} onChange={e=>setSenha(e.target.value)}
+                          placeholder="Senha provisória"
+                          style={{width:"100%",padding:"10px 12px",border:"0.5px solid "+T.border,borderRadius:8,
+                            fontFamily:T.f,fontSize:13,color:T.ink,outline:"none"}}/>
+                        <div style={{fontSize:11,color:T.inkFaint,marginTop:4}}>O médico poderá alterar a senha no primeiro acesso</div>
+                      </div>
+                    )}
+                  </div>
+                )}
+
+                {erro&&(
+                  <div style={{padding:"10px 12px",background:T.redBg||"#FEF2F2",borderRadius:8,
+                    fontSize:12,color:T.red||"#DC2626",marginBottom:14}}>
+                    ⚠️ {erro}
+                  </div>
+                )}
+
+                <div style={{display:"flex",gap:10}}>
+                  <button onClick={fecharModal}
+                    style={{flex:1,padding:"11px",borderRadius:8,border:"0.5px solid "+T.border,
+                      background:T.surface,color:T.inkMid,fontSize:13,cursor:"pointer",fontFamily:T.f}}>
+                    Cancelar
+                  </button>
+                  <button onClick={salvar} disabled={salvando}
+                    style={{flex:2,padding:"11px",borderRadius:8,border:"none",
+                      background:salvando?"#ccc":T.green,color:"#FFF",fontSize:13,fontWeight:500,
+                      cursor:salvando?"not-allowed":"pointer",fontFamily:T.f}}>
+                    {salvando?"Salvando...":(editando?"Salvar alterações":"Cadastrar médico")}
+                  </button>
+                </div>
+              </>
+            )}
+          </div>
+        </div>
+      )}
     </div>
   );
 }
@@ -1922,10 +2207,34 @@ function AbaExamesAdmin(){
   const[expandido,setExpandido]=useState(null);
 
   useEffect(()=>{
-    supabase.from("exames_acompanhamento")
-      .select("*,pacientes(nome),medicos(nome),documentos(titulo,conteudo_json)")
-      .order("created_at",{ascending:false})
-      .then(({data})=>{setLista(data||[]);setLoading(false);});
+    // Buscar exames acompanhamento + documentos pedido_exame sem acompanhamento
+    Promise.all([
+      supabase.from("exames_acompanhamento")
+        .select("*,pacientes(nome),medicos(nome),documentos(titulo,conteudo_json)")
+        .order("created_at",{ascending:false}),
+      supabase.from("documentos")
+        .select("id,paciente_id,medico_id,titulo,conteudo_json,created_at,pacientes(nome),medicos(nome)")
+        .eq("tipo","pedido_exame")
+        .order("created_at",{ascending:false})
+        .limit(50),
+    ]).then(async([{data:acomp},{data:docs}])=>{
+      // Encontrar docs sem acompanhamento e criar registros
+      const acompIds=new Set((acomp||[]).map(a=>a.documento_id));
+      const semAcomp=(docs||[]).filter(d=>!acompIds.has(d.id));
+      if(semAcomp.length>0){
+        await supabase.from("exames_acompanhamento").insert(
+          semAcomp.map(d=>({paciente_id:d.paciente_id,medico_id:d.medico_id,documento_id:d.id,status:"pendente"}))
+        );
+        // Recarregar
+        const{data:novo}=await supabase.from("exames_acompanhamento")
+          .select("*,pacientes(nome),medicos(nome),documentos(titulo,conteudo_json)")
+          .order("created_at",{ascending:false});
+        setLista(novo||[]);
+      } else {
+        setLista(acomp||[]);
+      }
+      setLoading(false);
+    });
   },[]);
 
   const atualizar=async(id,campos)=>{
