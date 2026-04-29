@@ -363,7 +363,7 @@ export function AppAdmin({admin,apiKey,onLogout}){
                     </div>
                     <div style={{fontSize:12,color:sel?T.green:T.inkMid,fontWeight:sel?500:400,
                       overflow:"hidden",textOverflow:"ellipsis",whiteSpace:"nowrap"}}>
-                      {m.nome?.split(" ")[0]||"Médico"}
+                      {(m.nome||"Médico").replace(/^Dr\.?\s*/i,"").split(" ")[0]}
                     </div>
                   </button>
                 );
@@ -1459,43 +1459,19 @@ function TelaMedicos(){
 
     try{
       if(editando){
-        // Atualizar médico existente
         const{error}=await supabase.from("medicos").update({
           nome:nome.trim(),email:email.trim(),crm:crm.trim(),
           especialidade,telefone:telefone.trim(),
         }).eq("id",editando.id);
         if(error)throw error;
       } else {
-        // Criar novo médico
-        let userId=null;
-
-        if(criarLogin&&senha.length>=6){
-          // Criar usuário no Auth
-          const{data:authData,error:authErr}=await supabase.auth.admin
-            ? await supabase.auth.signUp({email:email.trim(),password:senha,options:{data:{name:nome.trim(),role:"medico"}}})
-            : {data:null,error:{message:"Admin API não disponível — crie o login manualmente"}};
-
-          if(authErr&&!authErr.message.includes("Admin")){
-            // Tentar criar via signUp normal
-            const{data:sd}=await supabase.auth.signUp({
-              email:email.trim(),password:senha,
-              options:{data:{name:nome.trim(),role:"medico"}}
-            });
-            userId=sd?.user?.id||null;
-          } else {
-            userId=authData?.user?.id||null;
-          }
-        }
-
         const{error}=await supabase.from("medicos").insert({
           nome:nome.trim(),email:email.trim(),crm:crm.trim(),
           especialidade,telefone:telefone.trim(),
-          user_id:userId,
           ativo:true,
         });
         if(error)throw error;
       }
-
       setSucesso(true);
       carregarMedicos();
       setTimeout(fecharModal,1500);
@@ -1666,26 +1642,11 @@ function TelaMedicos(){
                   </select>
                 </div>
 
-                {/* Criar login */}
-                {!editando&&(
-                  <div style={{marginBottom:14}}>
-                    <div style={{display:"flex",alignItems:"center",gap:8,marginBottom:10}}>
-                      <input type="checkbox" checked={criarLogin} onChange={e=>setCriarLogin(e.target.checked)}
-                        style={{accentColor:T.green,width:15,height:15}}/>
-                      <div style={{fontSize:13,color:T.ink}}>Criar login de acesso ao app médico</div>
-                    </div>
-                    {criarLogin&&(
-                      <div>
-                        <div style={{fontSize:11,fontWeight:500,color:T.inkMid,marginBottom:5}}>SENHA PROVISÓRIA (mín. 6 caracteres)</div>
-                        <input type="password" value={senha} onChange={e=>setSenha(e.target.value)}
-                          placeholder="Senha provisória"
-                          style={{width:"100%",padding:"10px 12px",border:"0.5px solid "+T.border,borderRadius:8,
-                            fontFamily:T.f,fontSize:13,color:T.ink,outline:"none"}}/>
-                        <div style={{fontSize:11,color:T.inkFaint,marginTop:4}}>O médico poderá alterar a senha no primeiro acesso</div>
-                      </div>
-                    )}
-                  </div>
-                )}
+                {/* Nota sobre acesso */}
+                <div style={{padding:"10px 12px",background:T.greenBg,borderRadius:8,
+                  fontSize:12,color:T.green,marginBottom:14,lineHeight:1.5}}>
+                  ℹ️ O cadastro cria o perfil do médico na plataforma. O acesso ao app médico é configurado separadamente pelo administrador do sistema.
+                </div>
 
                 {erro&&(
                   <div style={{padding:"10px 12px",background:T.redBg||"#FEF2F2",borderRadius:8,
