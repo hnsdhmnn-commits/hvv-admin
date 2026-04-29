@@ -93,9 +93,13 @@ async function carregarEpisodios(){
   return data||[];
 }
 
-async function carregarMetricasGerais(){
+async function carregarMetricasGerais(medicosFiltro=[]){
   const inicio30=new Date(Date.now()-30*86400000).toISOString().slice(0,10);
   const inicio90=new Date(Date.now()-90*86400000).toISOString().slice(0,10);
+  const filtrado=medicosFiltro.length>0;
+
+  // Helper para adicionar filtro de médico
+  const comFiltro=(q)=>filtrado?q.in("medico_id",medicosFiltro):q;
 
   const[
     {count:totalPacientes},
@@ -112,19 +116,19 @@ async function carregarMetricasGerais(){
     {count:noShowMedico},
     {count:cancelamentos},
   ]=await Promise.all([
-    supabase.from("pacientes").select("*",{count:"exact",head:true}),
+    comFiltro(supabase.from("pacientes").select("*",{count:"exact",head:true})),
     supabase.from("medicos").select("*",{count:"exact",head:true}),
-    supabase.from("agendamentos").select("*",{count:"exact",head:true}).eq("status","realizada"),
-    supabase.from("checkins").select("*",{count:"exact",head:true}).gte("data",inicio30),
-    supabase.from("documentos").select("tipo,created_at").gte("created_at",new Date(Date.now()-30*86400000).toISOString()),
-    supabase.from("diagnosticos").select("cid,nome").order("created_at",{ascending:false}).limit(300),
-    supabase.from("plano_cuidado").select("*",{count:"exact",head:true}).eq("ativo",true),
-    supabase.from("agendamentos").select("status,medico_id,cancelado_por,created_at").gte("created_at",new Date(Date.now()-90*86400000).toISOString()),
-    supabase.from("avaliacoes").select("nota_csat,medico_id,created_at").eq("tipo","csat").gte("created_at",new Date(Date.now()-90*86400000).toISOString()),
-    supabase.from("avaliacoes").select("nota_nps,created_at").eq("tipo","nps").order("created_at",{ascending:false}),
-    supabase.from("agendamentos").select("*",{count:"exact",head:true}).eq("status","nao_compareceu_paciente"),
-    supabase.from("agendamentos").select("*",{count:"exact",head:true}).eq("status","nao_compareceu_medico"),
-    supabase.from("agendamentos").select("*",{count:"exact",head:true}).eq("status","cancelado"),
+    comFiltro(supabase.from("agendamentos").select("*",{count:"exact",head:true}).eq("status","realizada")),
+    comFiltro(supabase.from("checkins").select("*",{count:"exact",head:true}).gte("data",inicio30)),
+    comFiltro(supabase.from("documentos").select("tipo,created_at").gte("created_at",new Date(Date.now()-30*86400000).toISOString())),
+    comFiltro(supabase.from("diagnosticos").select("cid,nome").order("created_at",{ascending:false}).limit(300)),
+    comFiltro(supabase.from("plano_cuidado").select("*",{count:"exact",head:true}).eq("ativo",true)),
+    comFiltro(supabase.from("agendamentos").select("status,medico_id,cancelado_por,created_at").gte("created_at",new Date(Date.now()-90*86400000).toISOString())),
+    comFiltro(supabase.from("avaliacoes").select("nota_csat,medico_id,created_at").eq("tipo","csat").gte("created_at",new Date(Date.now()-90*86400000).toISOString())),
+    comFiltro(supabase.from("avaliacoes").select("nota_nps,created_at").eq("tipo","nps").order("created_at",{ascending:false})),
+    comFiltro(supabase.from("agendamentos").select("*",{count:"exact",head:true}).eq("status","nao_compareceu_paciente")),
+    comFiltro(supabase.from("agendamentos").select("*",{count:"exact",head:true}).eq("status","nao_compareceu_medico")),
+    comFiltro(supabase.from("agendamentos").select("*",{count:"exact",head:true}).eq("status","cancelado")),
   ]);
 
   // Top CIDs
@@ -395,17 +399,20 @@ function TelaMetricas({medicosFiltro=[]}){
   const[metricas,setMetricas]=useState(null);
   const[medicos,setMedicos]=useState([]);
   const[loading,setLoading]=useState(true);
+  const filtroKey=medicosFiltro.join(",");
 
   useEffect(()=>{
+    setLoading(true);
+    setMetricas(null);
     Promise.all([
       carregarMetricasGerais(medicosFiltro),
       carregarMedicosDetalhes(),
     ]).then(([m,md])=>{
       setMetricas(m);
-      setMedicos(md.filter(m=>medicosFiltro.length===0||medicosFiltro.includes(m.id)));
+      setMedicos(md.filter(med=>medicosFiltro.length===0||medicosFiltro.includes(med.id)));
       setLoading(false);
     });
-  },[JSON.stringify(medicosFiltro)]);
+  },[filtroKey]);
 
   if(loading)return<Spinner/>;
 
