@@ -175,53 +175,10 @@ async function carregarMetricasGerais(){
 }
 
 async function carregarMedicosDetalhes(){
-  const{data:medicos,error}=await supabase.from("medicos").select("id,nome,crm,especialidade,email,telefone");
-  if(error){console.warn("Erro ao carregar médicos:",error.message);return[];}
-  if(!medicos||medicos.length===0)return[];
-  const resultados=await Promise.all(medicos.map(async m=>{
-    const[
-      {count:pacientes},
-      {count:consultas},
-      {count:noShowPac},
-      {count:noShowMed},
-      {count:cancelamentos},
-      {data:csat},
-      {data:plano},
-      {data:regs},
-    ]=await Promise.all([
-      supabase.from("pacientes").select("*",{count:"exact",head:true}).eq("medico_id",m.id),
-      supabase.from("agendamentos").select("*",{count:"exact",head:true}).eq("medico_id",m.id).eq("status","realizada"),
-      supabase.from("agendamentos").select("*",{count:"exact",head:true}).eq("medico_id",m.id).eq("status","nao_compareceu_paciente"),
-      supabase.from("agendamentos").select("*",{count:"exact",head:true}).eq("medico_id",m.id).eq("status","nao_compareceu_medico"),
-      supabase.from("agendamentos").select("*",{count:"exact",head:true}).eq("medico_id",m.id).eq("status","cancelado"),
-      supabase.from("avaliacoes").select("nota_csat").eq("medico_id",m.id).eq("tipo","csat"),
-      supabase.from("plano_cuidado").select("id,paciente_id,frequencia").eq("medico_id",m.id).eq("ativo",true),
-      supabase.from("plano_registros").select("paciente_id").gte("data",new Date(Date.now()-30*86400000).toISOString().slice(0,10)),
-    ]);
-
-    // CSAT médio
-    const csatNotas=(csat||[]).map(a=>a.nota_csat).filter(Boolean);
-    const csatMedio=csatNotas.length>0?(csatNotas.reduce((a,b)=>a+b,0)/csatNotas.length).toFixed(1):null;
-
-    // Adesão ao plano — pacientes com registros / total com plano
-    const pacientesComPlano=new Set((plano||[]).map(p=>p.paciente_id));
-    const pacientesComRegistro=new Set((regs||[]).map(r=>r.paciente_id));
-    const adesao=pacientesComPlano.size>0?
-      Math.round([...pacientesComPlano].filter(id=>pacientesComRegistro.has(id)).length/pacientesComPlano.size*100):null;
-
-    return{
-      ...m,
-      totalPacientes:pacientes||0,
-      totalConsultas:consultas||0,
-      noShowPaciente:noShowPac||0,
-      noShowMedico:noShowMed||0,
-      cancelamentos:cancelamentos||0,
-      csatMedio,
-      csatTotal:csatNotas.length,
-      adesaoPlano:adesao,
-    };
-  }));
-  return resultados;
+  const{data:medicos,error}=await supabase.from("medicos").select("*");
+  console.log("[MEDICOS] data:",medicos,"error:",error);
+  if(error||!medicos)return[];
+  return medicos.map(m=>({...m,totalPacientes:0,totalConsultas:0,mediaCSAT:null,adesao:null}));
 }
 
 // ─── Componentes UI ────────────────────────────────────────────────
@@ -326,6 +283,20 @@ export function ScreenLogin({onLogin,titulo="HVV",subtitulo}){
 // ─── App Admin Principal ───────────────────────────────────────────
 export function AppAdmin({admin,apiKey,onLogout}){
   const[tela,setTela]=useState("metricas");
+  const[todosMedicos,setTodosMedicos]=useState([]);
+  const[medicosFiltro,setMedicosFiltro]=useState([]); // IDs selecionados — vazio = todos
+
+  useEffect(()=>{
+    carregarMedicosDetalhes().then(m=>setTodosMedicos(m));
+  },[]);
+
+  const toggleMedico=(id)=>{
+    setMedicosFiltro(prev=>
+      prev.includes(id)?prev.filter(x=>x!==id):[...prev,id]
+    );
+  };
+
+  const medicosFiltroAtivos=medicosFiltro.length>0?medicosFiltro:todosMedicos.map(m=>m.id);
 
   const MENU=[
     {id:"metricas",label:"Métricas",icon:"📊"},
@@ -361,6 +332,44 @@ export function AppAdmin({admin,apiKey,onLogout}){
               {m.label}
             </button>
           ))}
+
+          {/* Filtro de médicos */}
+          {todosMedicos.length>0&&(
+            <div style={{marginTop:16,paddingTop:16,borderTop:`0.5px solid ${T.border}`}}>
+              <div style={{fontSize:10,color:T.inkFaint,letterSpacing:"0.1em",marginBottom:8,paddingLeft:4}}>
+                FILTRAR POR MÉDICO
+              </div>
+              {medicosFiltro.length>0&&(
+                <button onClick={()=>setMedicosFiltro([])}
+                  style={{width:"100%",padding:"5px 8px",borderRadius:6,border:"none",
+                    background:T.orangeBg||"#FFF7ED",color:T.orange,fontSize:11,
+                    cursor:"pointer",fontFamily:T.f,marginBottom:6,textAlign:"left"}}>
+                  ✕ Limpar filtro
+                </button>
+              )}
+              {todosMedicos.map(m=>{
+                const sel=medicosFiltro.includes(m.id);
+                return(
+                  <button key={m.id} onClick={()=>toggleMedico(m.id)}
+                    style={{width:"100%",padding:"8px 10px",borderRadius:8,border:"none",
+                      textAlign:"left",cursor:"pointer",fontFamily:T.f,marginBottom:2,
+                      background:sel?T.greenBg:"transparent",
+                      display:"flex",alignItems:"center",gap:8,transition:"all 0.1s"}}>
+                    <div style={{width:14,height:14,borderRadius:4,flexShrink:0,
+                      border:sel?"none":"1px solid "+T.border,
+                      background:sel?T.green:"transparent",
+                      display:"flex",alignItems:"center",justifyContent:"center"}}>
+                      {sel&&<span style={{fontSize:9,color:"#FFF",fontWeight:700}}>✓</span>}
+                    </div>
+                    <div style={{fontSize:12,color:sel?T.green:T.inkMid,fontWeight:sel?500:400,
+                      overflow:"hidden",textOverflow:"ellipsis",whiteSpace:"nowrap"}}>
+                      {m.nome?.split(" ")[0]||"Médico"}
+                    </div>
+                  </button>
+                );
+              })}
+            </div>
+          )}
         </div>
 
         <div style={{padding:"16px",borderTop:`0.5px solid ${T.border}`}}>
@@ -371,9 +380,9 @@ export function AppAdmin({admin,apiKey,onLogout}){
 
       {/* Conteúdo */}
       <div style={{flex:1,overflowY:"auto"}}>
-        {tela==="metricas"&&<TelaMetricas/>}
+        {tela==="metricas"&&<TelaMetricas medicosFiltro={medicosFiltroAtivos}/>}
         {tela==="episodios"&&<TelaEpisodios apiKey={apiKey}/>}
-        {tela==="presencial"&&<TelaPresencial/>}
+        {tela==="presencial"&&<TelaPresencial medicosFiltro={medicosFiltroAtivos}/>}
         {tela==="medicos"&&<TelaMedicos/>}
         {tela==="programas"&&<TelaProgramas/>}
       </div>
@@ -382,21 +391,21 @@ export function AppAdmin({admin,apiKey,onLogout}){
 }
 
 // ─── Tela Métricas ─────────────────────────────────────────────────
-function TelaMetricas(){
+function TelaMetricas({medicosFiltro=[]}){
   const[metricas,setMetricas]=useState(null);
   const[medicos,setMedicos]=useState([]);
   const[loading,setLoading]=useState(true);
 
   useEffect(()=>{
     Promise.all([
-      carregarMetricasGerais(),
+      carregarMetricasGerais(medicosFiltro),
       carregarMedicosDetalhes(),
     ]).then(([m,md])=>{
       setMetricas(m);
-      setMedicos(md);
+      setMedicos(md.filter(m=>medicosFiltro.length===0||medicosFiltro.includes(m.id)));
       setLoading(false);
     });
-  },[]);
+  },[JSON.stringify(medicosFiltro)]);
 
   if(loading)return<Spinner/>;
 
@@ -406,7 +415,14 @@ function TelaMetricas(){
   return(
     <div style={{padding:"28px",maxWidth:1100,margin:"0 auto"}}>
       <div style={{marginBottom:24}}>
-        <div style={{fontSize:22,fontWeight:600,color:T.ink}}>Visão geral · Stone</div>
+        <div style={{display:"flex",alignItems:"center",gap:12}}>
+          <div style={{fontSize:22,fontWeight:600,color:T.ink}}>Visão geral · Stone</div>
+          {medicosFiltro.length<(medicos.length||999)&&medicosFiltro.length>0&&(
+            <div style={{fontSize:11,padding:"3px 10px",borderRadius:10,background:T.greenBg,color:T.green,fontWeight:500}}>
+              {medicosFiltro.length} médico{medicosFiltro.length>1?"s":""} selecionado{medicosFiltro.length>1?"s":""}
+            </div>
+          )}
+        </div>
         <div style={{fontSize:13,color:T.inkMid,marginTop:4}}>Últimos 90 dias · atualizado agora</div>
       </div>
 
@@ -1541,7 +1557,8 @@ function TelaMedicos(){
             {medicos.map(m=>(
               <div key={m.id} style={{display:"grid",gridTemplateColumns:"2fr 1fr 1fr 80px 80px 100px",
                 padding:"14px 20px",borderBottom:"0.5px solid "+T.border,alignItems:"center",
-                transition:"background 0.1s"}}
+                cursor:"pointer",transition:"background 0.1s"}}
+                onClick={()=>abrirModal(m)}
                 onMouseOver={e=>e.currentTarget.style.background=T.bgWarm}
                 onMouseOut={e=>e.currentTarget.style.background="transparent"}>
                 <div style={{display:"flex",alignItems:"center",gap:10}}>
@@ -1563,12 +1580,12 @@ function TelaMedicos(){
                   <div style={{fontSize:16,fontWeight:600,color:T.green}}>{m.totalConsultas||0}</div>
                 </div>
                 <div style={{display:"flex",gap:6,justifyContent:"flex-end"}}>
-                  <button onClick={()=>abrirModal(m)}
+                  <button onClick={e=>{e.stopPropagation();abrirModal(m);}}
                     style={{padding:"5px 12px",borderRadius:6,border:"0.5px solid "+T.border,
                       background:T.surface,fontSize:12,cursor:"pointer",fontFamily:T.f,color:T.ink}}>
                     Editar
                   </button>
-                  <button onClick={()=>inativar(m.id)}
+                  <button onClick={e=>{e.stopPropagation();inativar(m.id);}}
                     style={{padding:"5px 10px",borderRadius:6,border:"0.5px solid "+T.border,
                       background:T.surface,fontSize:12,cursor:"pointer",fontFamily:T.f,color:T.inkMid}}>
                     ✕
@@ -1777,7 +1794,7 @@ function TelaProgramas(){
 }
 
 // ─── Tela Atendimento Presencial ──────────────────────────────────
-function TelaPresencial(){
+function TelaPresencial({medicosFiltro=[]}){
   const[aba,setAba]=useState("internacoes");
   const ABAS=[
     {id:"internacoes",label:"🏥 Internações"},
