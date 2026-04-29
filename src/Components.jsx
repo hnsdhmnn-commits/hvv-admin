@@ -304,6 +304,7 @@ export function AppAdmin({admin,apiKey,onLogout}){
 
   const MENU=[
     {id:"metricas",label:"Métricas",icon:"📊"},
+    {id:"pacientes",label:"Pacientes",icon:"👥"},
     {id:"episodios",label:"Episódios Clínicos",icon:"🏥"},
     {id:"presencial",label:"Atendimento Presencial",icon:"🏨"},
     {id:"medicos",label:"Médicos",icon:"👨‍⚕️"},
@@ -385,6 +386,7 @@ export function AppAdmin({admin,apiKey,onLogout}){
       {/* Conteúdo */}
       <div style={{flex:1,overflowY:"auto"}}>
         {tela==="metricas"&&<TelaMetricas medicosFiltro={medicosFiltroAtivos}/>}
+        {tela==="pacientes"&&<TelaPacientesAdmin apiKey={apiKey} medicos={todosMedicos}/>}
         {tela==="episodios"&&<TelaEpisodios apiKey={apiKey}/>}
         {tela==="presencial"&&<TelaPresencial medicosFiltro={medicosFiltroAtivos}/>}
         {tela==="medicos"&&<TelaMedicos/>}
@@ -1386,6 +1388,350 @@ function FormEtapa({episodioId,duracaoMeses,apiKey,onSalvo,onCancelar}){
         </Btn>
       </div>
     </Card>
+  );
+}
+
+// ─── Tela Pacientes Admin ──────────────────────────────────────────
+function TelaPacientesAdmin({apiKey,medicos=[]}){
+  const[pacientes,setPacientes]=useState([]);
+  const[loading,setLoading]=useState(true);
+  const[busca,setBusca]=useState("");
+  const[filtroMedico,setFiltroMedico]=useState("");
+  const[filtroGenero,setFiltroGenero]=useState("");
+  const[filtroIdadeMin,setFiltroIdadeMin]=useState("");
+  const[filtroIdadeMax,setFiltroIdadeMax]=useState("");
+  const[filtroDiag,setFiltroDiag]=useState("");
+  const[modalCadastro,setModalCadastro]=useState(false);
+  const[salvando,setSalvando]=useState(false);
+  const[sucesso,setSucesso]=useState(false);
+  const[erro,setErro]=useState("");
+  // Campos cadastro
+  const[nome,setNome]=useState("");
+  const[email,setEmail]=useState("");
+  const[medicoId,setMedicoId]=useState("");
+  const[genero,setGenero]=useState("");
+  const[dataNasc,setDataNasc]=useState("");
+  const[cargo,setCargo]=useState("");
+  // IA Query
+  const[iaQuery,setIaQuery]=useState("");
+  const[iaResultado,setIaResultado]=useState("");
+  const[iaLoading,setIaLoading]=useState(false);
+
+  useEffect(()=>{carregarTodos();},[]);
+
+  const carregarTodos=async()=>{
+    setLoading(true);
+    const{data}=await supabase.from("pacientes")
+      .select("id,nome,email,genero,data_nascimento,cargo,medico_id,created_at,medicos(nome),diagnosticos(cid,nome)")
+      .order("nome",{ascending:true});
+    setPacientes(data||[]);
+    setLoading(false);
+  };
+
+  const calcIdade=(dataNasc)=>{
+    if(!dataNasc)return null;
+    return Math.floor((new Date()-new Date(dataNasc))/(365.25*86400000));
+  };
+
+  const pacientesFiltrados=pacientes.filter(p=>{
+    if(busca&&!p.nome?.toLowerCase().includes(busca.toLowerCase())&&!p.email?.toLowerCase().includes(busca.toLowerCase()))return false;
+    if(filtroMedico&&p.medico_id!==filtroMedico)return false;
+    if(filtroGenero&&p.genero!==filtroGenero)return false;
+    const idade=calcIdade(p.data_nascimento);
+    if(filtroIdadeMin&&idade<parseInt(filtroIdadeMin))return false;
+    if(filtroIdadeMax&&idade>parseInt(filtroIdadeMax))return false;
+    if(filtroDiag){
+      const diags=(p.diagnosticos||[]).map(d=>(d.cid+d.nome).toLowerCase());
+      if(!diags.some(d=>d.includes(filtroDiag.toLowerCase())))return false;
+    }
+    return true;
+  });
+
+  const exportarCSV=()=>{
+    const header=["Nome","E-mail","Gênero","Idade","Cargo","Médico","Diagnósticos"];
+    const rows=pacientesFiltrados.map(p=>[
+      p.nome||"",p.email||"",p.genero||"",
+      calcIdade(p.data_nascimento)||"",p.cargo||"",
+      p.medicos?.nome||"",
+      (p.diagnosticos||[]).map(d=>d.cid+" "+d.nome).join("; "),
+    ]);
+    const csv=[header,...rows].map(r=>r.map(v=>'"'+String(v).replace(/"/g,'""')+'"').join(",")).join("\n");
+    const a=document.createElement("a");
+    a.href="data:text/csv;charset=utf-8,"+encodeURIComponent(csv);
+    a.download="pacientes_hvv_"+new Date().toISOString().slice(0,10)+".csv";
+    a.click();
+  };
+
+  const consultarIA=async()=>{
+    if(!iaQuery.trim()||!apiKey)return;
+    setIaLoading(true);setIaResultado("");
+    const resumo=pacientesFiltrados.slice(0,200).map(p=>({
+      nome:p.nome,genero:p.genero,
+      idade:calcIdade(p.data_nascimento),
+      cargo:p.cargo,medico:p.medicos?.nome,
+      diags:(p.diagnosticos||[]).map(d=>d.cid+" "+d.nome).join(", "),
+    }));
+    try{
+      const res=await fetch("/.netlify/functions/claude",{
+        method:"POST",
+        headers:{"Content-Type":"application/json","x-api-key":apiKey,"anthropic-version":"2023-06-01"},
+        body:JSON.stringify({model:"claude-sonnet-4-20250514",max_tokens:800,
+          messages:[{role:"user",content:"Analise esta base de pacientes e responda: "+iaQuery+"\n\nDados: "+JSON.stringify(resumo)}]})
+      });
+      const data=await res.json();
+      setIaResultado(data.content?.[0]?.text||"Sem resposta.");
+    }catch(e){setIaResultado("Erro ao consultar IA.");}
+    setIaLoading(false);
+  };
+
+  const salvarPaciente=async()=>{
+    if(!nome.trim()||!email.trim()||!medicoId){
+      setErro("Nome, e-mail e médico são obrigatórios.");return;
+    }
+    setSalvando(true);setErro("");
+    // Verificar se email já existe
+    const{data:existente}=await supabase.from("pacientes").select("id").eq("email",email.trim()).single();
+    if(existente){setErro("Este e-mail já está cadastrado.");setSalvando(false);return;}
+    const{error}=await supabase.from("pacientes").insert({
+      nome:nome.trim(),email:email.trim(),medico_id:medicoId,
+      genero:genero||null,data_nascimento:dataNasc||null,cargo:cargo||null,
+      ativo:true,empresa_id:null,
+    });
+    if(error){setErro(error.message);setSalvando(false);return;}
+    setSucesso(true);
+    carregarTodos();
+    setTimeout(()=>{
+      setModalCadastro(false);setSucesso(false);
+      setNome("");setEmail("");setMedicoId("");setGenero("");setDataNasc("");setCargo("");
+    },1500);
+    setSalvando(false);
+  };
+
+  if(loading)return<Spinner/>;
+
+  return(
+    <div style={{padding:"28px",maxWidth:1100,margin:"0 auto"}}>
+
+      {/* Header */}
+      <div style={{display:"flex",alignItems:"center",justifyContent:"space-between",marginBottom:20}}>
+        <div>
+          <div style={{fontSize:22,fontWeight:600,color:T.ink}}>Pacientes</div>
+          <div style={{fontSize:13,color:T.inkMid,marginTop:2}}>{pacientes.length} cadastrados · {pacientesFiltrados.length} exibidos</div>
+        </div>
+        <div style={{display:"flex",gap:10}}>
+          <button onClick={exportarCSV}
+            style={{padding:"9px 18px",borderRadius:8,border:"0.5px solid "+T.border,background:T.surface,
+              fontSize:13,cursor:"pointer",fontFamily:T.f,color:T.ink,display:"flex",alignItems:"center",gap:6}}>
+            ↓ Exportar CSV
+          </button>
+          <button onClick={()=>setModalCadastro(true)}
+            style={{padding:"9px 18px",borderRadius:8,border:"none",background:T.green,
+              fontSize:13,fontWeight:500,cursor:"pointer",fontFamily:T.f,color:"#FFF"}}>
+            + Cadastrar paciente
+          </button>
+        </div>
+      </div>
+
+      {/* Filtros */}
+      <Card style={{padding:"16px 20px",marginBottom:16}}>
+        <div style={{display:"grid",gridTemplateColumns:"2fr 1fr 1fr 80px 80px 1fr",gap:10,alignItems:"end"}}>
+          <div>
+            <div style={{fontSize:10,color:T.inkFaint,marginBottom:4}}>BUSCAR</div>
+            <input value={busca} onChange={e=>setBusca(e.target.value)} placeholder="Nome ou e-mail..."
+              style={{width:"100%",padding:"8px 10px",border:"0.5px solid "+T.border,borderRadius:7,fontFamily:T.f,fontSize:13,outline:"none"}}/>
+          </div>
+          <div>
+            <div style={{fontSize:10,color:T.inkFaint,marginBottom:4}}>MÉDICO</div>
+            <select value={filtroMedico} onChange={e=>setFiltroMedico(e.target.value)}
+              style={{width:"100%",padding:"8px 10px",border:"0.5px solid "+T.border,borderRadius:7,fontFamily:T.f,fontSize:13,outline:"none",background:T.surface}}>
+              <option value="">Todos</option>
+              {medicos.map(m=><option key={m.id} value={m.id}>{m.nome}</option>)}
+            </select>
+          </div>
+          <div>
+            <div style={{fontSize:10,color:T.inkFaint,marginBottom:4}}>GÊNERO</div>
+            <select value={filtroGenero} onChange={e=>setFiltroGenero(e.target.value)}
+              style={{width:"100%",padding:"8px 10px",border:"0.5px solid "+T.border,borderRadius:7,fontFamily:T.f,fontSize:13,outline:"none",background:T.surface}}>
+              <option value="">Todos</option>
+              <option value="masculino">Masculino</option>
+              <option value="feminino">Feminino</option>
+              <option value="outro">Outro</option>
+            </select>
+          </div>
+          <div>
+            <div style={{fontSize:10,color:T.inkFaint,marginBottom:4}}>IDADE MIN</div>
+            <input type="number" value={filtroIdadeMin} onChange={e=>setFiltroIdadeMin(e.target.value)} placeholder="ex: 30"
+              style={{width:"100%",padding:"8px 10px",border:"0.5px solid "+T.border,borderRadius:7,fontFamily:T.f,fontSize:13,outline:"none"}}/>
+          </div>
+          <div>
+            <div style={{fontSize:10,color:T.inkFaint,marginBottom:4}}>IDADE MAX</div>
+            <input type="number" value={filtroIdadeMax} onChange={e=>setFiltroIdadeMax(e.target.value)} placeholder="ex: 50"
+              style={{width:"100%",padding:"8px 10px",border:"0.5px solid "+T.border,borderRadius:7,fontFamily:T.f,fontSize:13,outline:"none"}}/>
+          </div>
+          <div>
+            <div style={{fontSize:10,color:T.inkFaint,marginBottom:4}}>DIAGNÓSTICO</div>
+            <input value={filtroDiag} onChange={e=>setFiltroDiag(e.target.value)} placeholder="ex: hipertensão ou I10"
+              style={{width:"100%",padding:"8px 10px",border:"0.5px solid "+T.border,borderRadius:7,fontFamily:T.f,fontSize:13,outline:"none"}}/>
+          </div>
+        </div>
+        {(busca||filtroMedico||filtroGenero||filtroIdadeMin||filtroIdadeMax||filtroDiag)&&(
+          <button onClick={()=>{setBusca("");setFiltroMedico("");setFiltroGenero("");setFiltroIdadeMin("");setFiltroIdadeMax("");setFiltroDiag("");}}
+            style={{marginTop:10,padding:"4px 12px",borderRadius:6,border:"none",background:T.orangeBg||"#FFF7ED",
+              color:T.orange,fontSize:11,cursor:"pointer",fontFamily:T.f}}>
+            ✕ Limpar filtros
+          </button>
+        )}
+      </Card>
+
+      {/* Consulta IA */}
+      <Card style={{padding:"16px 20px",marginBottom:16,border:"1px solid "+T.greenBorder}}>
+        <div style={{fontSize:11,color:T.green,fontWeight:600,letterSpacing:"0.08em",marginBottom:10}}>✦ CONSULTA IA — ANÁLISE DE SUBPOPULAÇÃO</div>
+        <div style={{display:"flex",gap:10}}>
+          <input value={iaQuery} onChange={e=>setIaQuery(e.target.value)}
+            onKeyDown={e=>e.key==="Enter"&&consultarIA()}
+            placeholder="Ex: Quais pacientes têm hipertensão e mais de 50 anos? Qual a distribuição de gênero da carteira?"
+            style={{flex:1,padding:"9px 12px",border:"0.5px solid "+T.border,borderRadius:8,fontFamily:T.f,fontSize:13,outline:"none"}}/>
+          <button onClick={consultarIA} disabled={iaLoading||!iaQuery.trim()}
+            style={{padding:"9px 18px",borderRadius:8,border:"none",
+              background:iaLoading||!iaQuery.trim()?"#ccc":T.green,
+              color:"#FFF",fontSize:13,fontWeight:500,cursor:iaLoading?"not-allowed":"pointer",fontFamily:T.f,whiteSpace:"nowrap"}}>
+            {iaLoading?"Analisando...":"Consultar IA"}
+          </button>
+        </div>
+        {iaResultado&&(
+          <div style={{marginTop:12,padding:"12px 14px",background:T.greenBg,borderRadius:8,
+            fontSize:13,color:T.ink,lineHeight:1.7,whiteSpace:"pre-wrap"}}>
+            {iaResultado}
+          </div>
+        )}
+      </Card>
+
+      {/* Tabela */}
+      <Card style={{padding:"0",overflow:"hidden"}}>
+        <div style={{display:"grid",gridTemplateColumns:"2fr 1fr 60px 80px 1fr",
+          padding:"10px 20px",background:T.bgWarm,borderBottom:"0.5px solid "+T.border,
+          fontSize:10,color:T.inkFaint,fontWeight:500,letterSpacing:"0.08em"}}>
+          <div>PACIENTE</div><div>MÉDICO</div><div>IDADE</div><div>GÊNERO</div><div>DIAGNÓSTICOS</div>
+        </div>
+        {pacientesFiltrados.length===0?(
+          <div style={{padding:"48px",textAlign:"center",color:T.inkFaint}}>
+            <div style={{fontSize:32,marginBottom:12}}>👥</div>
+            <div style={{fontSize:14,fontWeight:500,color:T.ink,marginBottom:6}}>Nenhum paciente encontrado</div>
+            <div style={{fontSize:13,marginBottom:20}}>Ajuste os filtros ou cadastre o primeiro paciente</div>
+          </div>
+        ):pacientesFiltrados.map(p=>{
+          const idade=calcIdade(p.data_nascimento);
+          const diags=(p.diagnosticos||[]).slice(0,2);
+          return(
+            <div key={p.id} style={{display:"grid",gridTemplateColumns:"2fr 1fr 60px 80px 1fr",
+              padding:"12px 20px",borderBottom:"0.5px solid "+T.border,alignItems:"center",
+              transition:"background 0.1s",cursor:"default"}}
+              onMouseOver={e=>e.currentTarget.style.background=T.bgWarm}
+              onMouseOut={e=>e.currentTarget.style.background="transparent"}>
+              <div>
+                <div style={{fontSize:13,fontWeight:500,color:T.ink}}>{p.nome}</div>
+                <div style={{fontSize:11,color:T.inkFaint}}>{p.email}</div>
+              </div>
+              <div style={{fontSize:12,color:T.inkMid}}>{p.medicos?.nome||"—"}</div>
+              <div style={{fontSize:13,color:T.ink,fontWeight:500}}>{idade||"—"}</div>
+              <div style={{fontSize:12,color:T.inkMid,textTransform:"capitalize"}}>{p.genero||"—"}</div>
+              <div style={{display:"flex",gap:4,flexWrap:"wrap"}}>
+                {diags.length>0?diags.map((d,i)=>(
+                  <span key={i} style={{fontSize:10,padding:"2px 7px",borderRadius:8,
+                    background:T.blueBg||"#EFF6FF",color:T.blue||"#1D6FE8",fontWeight:500}}>
+                    {d.cid}
+                  </span>
+                )):<span style={{fontSize:11,color:T.inkFaint}}>—</span>}
+                {(p.diagnosticos||[]).length>2&&(
+                  <span style={{fontSize:10,color:T.inkFaint}}>+{p.diagnosticos.length-2}</span>
+                )}
+              </div>
+            </div>
+          );
+        })}
+      </Card>
+
+      {/* Modal Cadastro */}
+      {modalCadastro&&(
+        <div style={{position:"fixed",inset:0,background:"rgba(0,0,0,0.4)",display:"flex",
+          alignItems:"center",justifyContent:"center",zIndex:1000,padding:24}}>
+          <div style={{background:T.surface,borderRadius:16,padding:"32px",maxWidth:460,
+            width:"100%",boxShadow:"0 12px 40px rgba(0,0,0,0.15)",maxHeight:"90vh",overflowY:"auto"}}>
+
+            <div style={{fontSize:18,fontWeight:600,color:T.ink,marginBottom:4}}>Cadastrar paciente</div>
+            <div style={{fontSize:13,color:T.inkMid,marginBottom:24}}>O paciente só poderá acessar o app após o cadastro aqui.</div>
+
+            {sucesso?(
+              <div style={{textAlign:"center",padding:"20px 0"}}>
+                <div style={{fontSize:40,marginBottom:12}}>✅</div>
+                <div style={{fontSize:16,fontWeight:500,color:T.green}}>Paciente cadastrado!</div>
+                <div style={{fontSize:13,color:T.inkMid,marginTop:6}}>Ele já pode criar sua conta no app.</div>
+              </div>
+            ):(
+              <>
+                <div style={{marginBottom:12}}>
+                  <div style={{fontSize:11,fontWeight:500,color:T.inkMid,marginBottom:5}}>NOME COMPLETO *</div>
+                  <input value={nome} onChange={e=>setNome(e.target.value)} placeholder="Nome completo"
+                    style={{width:"100%",padding:"10px 12px",border:"0.5px solid "+T.border,borderRadius:8,fontFamily:T.f,fontSize:13,outline:"none"}}/>
+                </div>
+                <div style={{marginBottom:12}}>
+                  <div style={{fontSize:11,fontWeight:500,color:T.inkMid,marginBottom:5}}>E-MAIL CORPORATIVO *</div>
+                  <input type="email" value={email} onChange={e=>setEmail(e.target.value)} placeholder="colaborador@empresa.com"
+                    style={{width:"100%",padding:"10px 12px",border:"0.5px solid "+T.border,borderRadius:8,fontFamily:T.f,fontSize:13,outline:"none"}}/>
+                </div>
+                <div style={{marginBottom:12}}>
+                  <div style={{fontSize:11,fontWeight:500,color:T.inkMid,marginBottom:5}}>MÉDICO RESPONSÁVEL *</div>
+                  <select value={medicoId} onChange={e=>setMedicoId(e.target.value)}
+                    style={{width:"100%",padding:"10px 12px",border:"0.5px solid "+T.border,borderRadius:8,fontFamily:T.f,fontSize:13,outline:"none",background:T.surface}}>
+                    <option value="">Selecionar médico...</option>
+                    {medicos.map(m=><option key={m.id} value={m.id}>{m.nome}</option>)}
+                  </select>
+                </div>
+                <div style={{display:"grid",gridTemplateColumns:"1fr 1fr",gap:10,marginBottom:12}}>
+                  <div>
+                    <div style={{fontSize:11,fontWeight:500,color:T.inkMid,marginBottom:5}}>GÊNERO</div>
+                    <select value={genero} onChange={e=>setGenero(e.target.value)}
+                      style={{width:"100%",padding:"10px 12px",border:"0.5px solid "+T.border,borderRadius:8,fontFamily:T.f,fontSize:13,outline:"none",background:T.surface}}>
+                      <option value="">Não informado</option>
+                      <option value="masculino">Masculino</option>
+                      <option value="feminino">Feminino</option>
+                      <option value="outro">Outro</option>
+                    </select>
+                  </div>
+                  <div>
+                    <div style={{fontSize:11,fontWeight:500,color:T.inkMid,marginBottom:5}}>DATA DE NASCIMENTO</div>
+                    <input type="date" value={dataNasc} onChange={e=>setDataNasc(e.target.value)}
+                      style={{width:"100%",padding:"10px 12px",border:"0.5px solid "+T.border,borderRadius:8,fontFamily:T.f,fontSize:13,outline:"none"}}/>
+                  </div>
+                </div>
+                <div style={{marginBottom:20}}>
+                  <div style={{fontSize:11,fontWeight:500,color:T.inkMid,marginBottom:5}}>CARGO</div>
+                  <input value={cargo} onChange={e=>setCargo(e.target.value)} placeholder="Ex: Analista, Coordenador..."
+                    style={{width:"100%",padding:"10px 12px",border:"0.5px solid "+T.border,borderRadius:8,fontFamily:T.f,fontSize:13,outline:"none"}}/>
+                </div>
+                {erro&&(
+                  <div style={{padding:"10px 12px",background:"#FEF2F2",borderRadius:8,
+                    fontSize:12,color:"#DC2626",marginBottom:14}}>⚠️ {erro}</div>
+                )}
+                <div style={{display:"flex",gap:10}}>
+                  <button onClick={()=>{setModalCadastro(false);setErro("");}}
+                    style={{flex:1,padding:"11px",borderRadius:8,border:"0.5px solid "+T.border,
+                      background:T.surface,color:T.inkMid,fontSize:13,cursor:"pointer",fontFamily:T.f}}>
+                    Cancelar
+                  </button>
+                  <button onClick={salvarPaciente} disabled={salvando}
+                    style={{flex:2,padding:"11px",borderRadius:8,border:"none",
+                      background:salvando?"#ccc":T.green,color:"#FFF",fontSize:13,fontWeight:500,
+                      cursor:salvando?"not-allowed":"pointer",fontFamily:T.f}}>
+                    {salvando?"Salvando...":"Cadastrar paciente"}
+                  </button>
+                </div>
+              </>
+            )}
+          </div>
+        </div>
+      )}
+    </div>
   );
 }
 
