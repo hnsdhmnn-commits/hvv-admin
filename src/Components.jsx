@@ -175,8 +175,9 @@ async function carregarMetricasGerais(){
 }
 
 async function carregarMedicosDetalhes(){
-  const{data:medicos}=await supabase.from("medicos").select("id,nome,crm,especialidade,email");
-  if(!medicos)return[];
+  const{data:medicos,error}=await supabase.from("medicos").select("id,nome,crm,especialidade,email,telefone");
+  if(error){console.warn("Erro ao carregar médicos:",error.message);return[];}
+  if(!medicos||medicos.length===0)return[];
   const resultados=await Promise.all(medicos.map(async m=>{
     const[
       {count:pacientes},
