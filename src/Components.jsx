@@ -116,7 +116,7 @@ async function carregarMetricasGerais(medicosFiltro=[]){
     {count:noShowMedico},
     {count:cancelamentos},
   ]=await Promise.all([
-    comFiltro(supabase.from("pacientes").select("*",{count:"exact",head:true})),
+    comFiltro(supabase.from("pacientes").select("*",{count:"exact",head:true}).eq("ativo",true)),
     supabase.from("medicos").select("*",{count:"exact",head:true}),
     comFiltro(supabase.from("agendamentos").select("*",{count:"exact",head:true}).eq("status","realizada")),
     comFiltro(supabase.from("checkins").select("*",{count:"exact",head:true}).gte("data",inicio30)),
@@ -306,6 +306,7 @@ export function AppAdmin({admin,apiKey,onLogout}){
     {id:"metricas",label:"Métricas",icon:"📊"},
     {id:"pacientes",label:"Pacientes",icon:"👥"},
     {id:"episodios",label:"Episódios Clínicos",icon:"🏥"},
+    {id:"politicas",label:"Políticas de Cuidado",icon:"📋"},
     {id:"presencial",label:"Atendimento Presencial",icon:"🏨"},
     {id:"medicos",label:"Médicos",icon:"👨‍⚕️"},
     {id:"programas",label:"Programas",icon:"✨"},
@@ -388,6 +389,7 @@ export function AppAdmin({admin,apiKey,onLogout}){
         {tela==="metricas"&&<TelaMetricas medicosFiltro={medicosFiltroAtivos}/>}
         {tela==="pacientes"&&<TelaPacientesAdmin apiKey={apiKey} medicos={todosMedicos}/>}
         {tela==="episodios"&&<TelaEpisodios apiKey={apiKey}/>}
+        {tela==="politicas"&&<TelaPoliticasConfig/>}
         {tela==="presencial"&&<TelaPresencial medicosFiltro={medicosFiltroAtivos}/>}
         {tela==="medicos"&&<TelaMedicos/>}
         {tela==="programas"&&<TelaProgramas/>}
@@ -684,6 +686,292 @@ function TelaEpisodios({apiKey}){
           ))}
         </div>
       )}
+    </div>
+  );
+}
+
+// ─── Tela de Políticas de Cuidado (rastreamento + vacinação) ──────
+function TelaPoliticasConfig(){
+  const[abaPolitica,setAbaPolitica]=useState("rastreamento"); // rastreamento | vacinacao
+  const[empresas,setEmpresas]=useState([]);
+  const[empresaSel,setEmpresaSel]=useState(null);
+  const[items,setItems]=useState([]);
+  const[loading,setLoading]=useState(true);
+  const[modalEditar,setModalEditar]=useState(null); // null | {modo:'novo'|'editar', dados}
+
+  // Carregar empresas
+  useEffect(()=>{
+    supabase.from("empresas").select("id,nome").order("nome").then(({data})=>{
+      setEmpresas(data||[]);
+      if(data&&data.length>0)setEmpresaSel(data[0].id);
+    });
+  },[]);
+
+  // Carregar itens da empresa selecionada
+  const recarregar=async()=>{
+    if(!empresaSel)return;
+    setLoading(true);
+    const tabela = abaPolitica==="rastreamento" ? "rastreamento_config" : "vacinacao_config";
+    const{data}=await supabase.from(tabela)
+      .select("*")
+      .eq("empresa_id",empresaSel)
+      .order("ordem",{ascending:true,nullsFirst:false})
+      .order("nome");
+    setItems(data||[]);
+    setLoading(false);
+  };
+
+  useEffect(()=>{recarregar();},[empresaSel,abaPolitica]);
+
+  const salvarItem=async(dados)=>{
+    const tabela = abaPolitica==="rastreamento" ? "rastreamento_config" : "vacinacao_config";
+    const payload={...dados, empresa_id:empresaSel};
+    if(payload.id){
+      const{id,...rest}=payload;
+      await supabase.from(tabela).update(rest).eq("id",id);
+    } else {
+      delete payload.id;
+      await supabase.from(tabela).insert(payload);
+    }
+    setModalEditar(null);
+    recarregar();
+  };
+
+  const toggleAtivo=async(item)=>{
+    const tabela = abaPolitica==="rastreamento" ? "rastreamento_config" : "vacinacao_config";
+    await supabase.from(tabela).update({ativo:!item.ativo}).eq("id",item.id);
+    recarregar();
+  };
+
+  const apagarItem=async(item)=>{
+    if(!confirm(`Apagar "${item.nome}" da política?\n\nIsso NÃO afeta registros já criados de pacientes.`))return;
+    const tabela = abaPolitica==="rastreamento" ? "rastreamento_config" : "vacinacao_config";
+    await supabase.from(tabela).delete().eq("id",item.id);
+    recarregar();
+  };
+
+  const empresaSelObj = empresas.find(e=>e.id===empresaSel);
+
+  return(
+    <div style={{padding:"28px 32px",maxWidth:1100,margin:"0 auto"}}>
+      <div style={{marginBottom:24}}>
+        <div style={{fontSize:22,fontWeight:600,color:T.ink,marginBottom:6}}>Políticas de Cuidado</div>
+        <div style={{fontSize:13,color:T.inkMid}}>
+          Configure rastreamentos e vacinação por empresa contratante. Cada empresa pode ter sua própria política.
+        </div>
+      </div>
+
+      {/* Seletor de empresa */}
+      <div style={{display:"flex",gap:12,alignItems:"center",marginBottom:16,flexWrap:"wrap"}}>
+        <div style={{fontSize:11,color:T.inkFaint,letterSpacing:"0.1em"}}>EMPRESA:</div>
+        <select value={empresaSel||""} onChange={e=>setEmpresaSel(e.target.value)}
+          style={{padding:"7px 12px",border:"1px solid "+T.border,borderRadius:8,fontFamily:T.f,fontSize:13,color:T.ink,background:T.surface,minWidth:200}}>
+          {empresas.map(e=>(<option key={e.id} value={e.id}>{e.nome}</option>))}
+        </select>
+      </div>
+
+      {/* Abas Rastreamento / Vacinação */}
+      <div style={{display:"flex",gap:0,borderBottom:`1px solid ${T.border}`,marginBottom:20}}>
+        {[
+          {id:"rastreamento",label:"Rastreamento",icon:"🔬"},
+          {id:"vacinacao",label:"Vacinação",icon:"💉"},
+        ].map(a=>(
+          <button key={a.id} onClick={()=>setAbaPolitica(a.id)}
+            style={{padding:"10px 18px",background:"none",border:"none",
+              borderBottom:abaPolitica===a.id?"2px solid "+T.green:"2px solid transparent",
+              cursor:"pointer",fontFamily:T.f,fontSize:13,marginBottom:-1,
+              color:abaPolitica===a.id?T.green:T.inkMid,fontWeight:abaPolitica===a.id?500:400,
+              display:"flex",alignItems:"center",gap:8}}>
+            <span style={{fontSize:15}}>{a.icon}</span>
+            {a.label}
+          </button>
+        ))}
+      </div>
+
+      <div style={{display:"flex",justifyContent:"space-between",alignItems:"center",marginBottom:16}}>
+        <div style={{fontSize:12,color:T.inkMid}}>
+          {items.length} {abaPolitica==="rastreamento"?"rastreamentos":"vacinas"} configurados {empresaSelObj?"para "+empresaSelObj.nome:""}
+        </div>
+        <Btn onClick={()=>setModalEditar({modo:"novo",dados:{}})}>+ Novo {abaPolitica==="rastreamento"?"rastreamento":"vacina"}</Btn>
+      </div>
+
+      {loading?(
+        <div style={{textAlign:"center",padding:40,color:T.inkFaint}}>Carregando...</div>
+      ):items.length===0?(
+        <Card style={{padding:40,textAlign:"center"}}>
+          <div style={{fontSize:32,marginBottom:12}}>{abaPolitica==="rastreamento"?"🔬":"💉"}</div>
+          <div style={{fontSize:14,color:T.ink,marginBottom:6}}>Nenhum item configurado</div>
+          <div style={{fontSize:12,color:T.inkMid,marginBottom:16}}>
+            Adicione o primeiro {abaPolitica==="rastreamento"?"rastreamento":"vacina"} desta política.
+          </div>
+        </Card>
+      ):(
+        <div style={{display:"flex",flexDirection:"column",gap:8}}>
+          {items.map(item=>(
+            <Card key={item.id} style={{padding:"14px 18px",opacity:item.ativo?1:0.5}}>
+              <div style={{display:"flex",alignItems:"flex-start",gap:14}}>
+                <span style={{fontSize:20,flexShrink:0,marginTop:2}}>
+                  {abaPolitica==="rastreamento"?(item.tipo==="laboratorial"?"🧪":item.tipo==="imagem"?"📷":"🩺"):"💉"}
+                </span>
+                <div style={{flex:1}}>
+                  <div style={{display:"flex",alignItems:"center",gap:8,marginBottom:4}}>
+                    <div style={{fontSize:14,fontWeight:500,color:T.ink}}>{item.nome}</div>
+                    {!item.ativo&&<Badge label="INATIVO" color={T.inkFaint}/>}
+                    {item.decisao_compartilhada&&<Badge label="DECISÃO COMPARTILHADA" color={T.purple} bg={T.purpleBg}/>}
+                  </div>
+                  {item.descricao&&<div style={{fontSize:12,color:T.inkMid,marginBottom:6}}>{item.descricao}</div>}
+                  <div style={{display:"flex",gap:14,fontSize:11,color:T.inkFaint,flexWrap:"wrap"}}>
+                    <span>Idade: {item.idade_inicio}{item.idade_fim?` a ${item.idade_fim}`:"+"}</span>
+                    <span>Gênero: {item.genero||"todos"}</span>
+                    {item.periodicidade_meses&&<span>A cada {item.periodicidade_meses} meses</span>}
+                    {item.tipo&&<span>Tipo: {item.tipo}</span>}
+                    {item.doses_total&&<span>{item.doses_total} dose(s)</span>}
+                    {item.alerta_dias_antes&&<span>Alerta {item.alerta_dias_antes}d antes</span>}
+                  </div>
+                </div>
+                <div style={{display:"flex",gap:6,flexShrink:0}}>
+                  <Btn small variant="outline" onClick={()=>toggleAtivo(item)}>
+                    {item.ativo?"Desativar":"Ativar"}
+                  </Btn>
+                  <Btn small variant="outline" onClick={()=>setModalEditar({modo:"editar",dados:item})}>
+                    Editar
+                  </Btn>
+                  <Btn small variant="danger" onClick={()=>apagarItem(item)}>Apagar</Btn>
+                </div>
+              </div>
+            </Card>
+          ))}
+        </div>
+      )}
+
+      {/* Modal Editar */}
+      {modalEditar&&(
+        <FormPoliticaItem
+          modo={modalEditar.modo}
+          dados={modalEditar.dados}
+          tipo={abaPolitica}
+          onSalvar={salvarItem}
+          onCancelar={()=>setModalEditar(null)}
+        />
+      )}
+    </div>
+  );
+}
+
+// ─── Form de item de política (modal) ─────────────────────────────
+function FormPoliticaItem({modo,dados,tipo,onSalvar,onCancelar}){
+  const[nome,setNome]=useState(dados.nome||"");
+  const[descricao,setDescricao]=useState(dados.descricao||"");
+  const[idadeInicio,setIdadeInicio]=useState(dados.idade_inicio?.toString()||"18");
+  const[idadeFim,setIdadeFim]=useState(dados.idade_fim?.toString()||"");
+  const[genero,setGenero]=useState(dados.genero||"todos");
+  const[periodicidade,setPeriodicidade]=useState(dados.periodicidade_meses?.toString()||"");
+  const[tipoR,setTipoR]=useState(dados.tipo||"laboratorial"); // só rastreamento
+  const[dosesTotal,setDosesTotal]=useState(dados.doses_total?.toString()||""); // só vacinação
+  const[decisaoCompartilhada,setDecisaoCompartilhada]=useState(dados.decisao_compartilhada||false);
+  const[alertaDiasAntes,setAlertaDiasAntes]=useState(dados.alerta_dias_antes?.toString()||"30");
+  const[justificativa,setJustificativa]=useState(dados.justificativa||"");
+  const[ordem,setOrdem]=useState(dados.ordem?.toString()||"99");
+  const[salvando,setSalvando]=useState(false);
+
+  const handleSalvar=async()=>{
+    if(!nome.trim()){alert("Nome obrigatório");return;}
+    setSalvando(true);
+    const payload={
+      nome:nome.trim(),
+      descricao:descricao.trim()||null,
+      idade_inicio:parseInt(idadeInicio)||0,
+      idade_fim:idadeFim?parseInt(idadeFim):null,
+      genero,
+      periodicidade_meses:periodicidade?parseInt(periodicidade):null,
+      ordem:parseInt(ordem)||99,
+      ativo:true,
+    };
+    if(tipo==="rastreamento"){
+      payload.tipo=tipoR;
+      payload.justificativa=justificativa.trim()||null;
+    } else {
+      payload.doses_total=dosesTotal?parseInt(dosesTotal):1;
+      payload.decisao_compartilhada=decisaoCompartilhada;
+      payload.alerta_dias_antes=parseInt(alertaDiasAntes)||30;
+    }
+    if(dados.id)payload.id=dados.id;
+    await onSalvar(payload);
+    setSalvando(false);
+  };
+
+  return(
+    <div style={{position:"fixed",inset:0,background:"rgba(0,0,0,0.5)",display:"flex",alignItems:"center",justifyContent:"center",zIndex:100,padding:20}}>
+      <Card style={{padding:"28px",maxWidth:600,width:"100%",maxHeight:"90vh",overflowY:"auto"}}>
+        <div style={{fontSize:18,fontWeight:600,color:T.ink,marginBottom:6}}>
+          {modo==="novo"?"Novo":"Editar"} {tipo==="rastreamento"?"rastreamento":"vacina"}
+        </div>
+        <div style={{fontSize:12,color:T.inkMid,marginBottom:20}}>
+          Configurar item da política de cuidado
+        </div>
+
+        <Input label="NOME *" value={nome} onChange={setNome}
+          placeholder={tipo==="rastreamento"?"Ex: Mamografia":"Ex: Influenza (gripe)"}/>
+        <Textarea label="DESCRIÇÃO" value={descricao} onChange={setDescricao} rows={2}
+          placeholder={tipo==="rastreamento"?"Ex: Rastreio de câncer de mama":"Ex: Vacina anual contra a gripe"}/>
+
+        {/* Linha idade + gênero */}
+        <div style={{display:"grid",gridTemplateColumns:"1fr 1fr 1fr",gap:10}}>
+          <Input label="IDADE INICIAL" value={idadeInicio} onChange={setIdadeInicio} type="number" placeholder="18"/>
+          <Input label="IDADE FINAL (opcional)" value={idadeFim} onChange={setIdadeFim} type="number" placeholder="vazio = sem limite"/>
+          <div style={{marginBottom:12}}>
+            <div style={{fontSize:10,color:T.inkFaint,letterSpacing:"0.1em",marginBottom:5}}>GÊNERO</div>
+            <select value={genero} onChange={e=>setGenero(e.target.value)}
+              style={{width:"100%",padding:"9px 12px",border:`1px solid ${T.border}`,borderRadius:8,fontFamily:T.f,fontSize:13,color:T.ink,background:T.surface,boxSizing:"border-box"}}>
+              <option value="todos">Todos</option>
+              <option value="feminino">Feminino</option>
+              <option value="masculino">Masculino</option>
+            </select>
+          </div>
+        </div>
+
+        <div style={{display:"grid",gridTemplateColumns:"1fr 1fr",gap:10}}>
+          <Input label="PERIODICIDADE (meses)" value={periodicidade} onChange={setPeriodicidade} type="number"
+            placeholder={tipo==="rastreamento"?"Ex: 24 (bienal)":"Ex: 12 (anual)"}/>
+          <Input label="ORDEM" value={ordem} onChange={setOrdem} type="number" placeholder="99"/>
+        </div>
+
+        {tipo==="rastreamento"&&(
+          <>
+            <div style={{marginBottom:12}}>
+              <div style={{fontSize:10,color:T.inkFaint,letterSpacing:"0.1em",marginBottom:5}}>TIPO</div>
+              <select value={tipoR} onChange={e=>setTipoR(e.target.value)}
+                style={{width:"100%",padding:"9px 12px",border:`1px solid ${T.border}`,borderRadius:8,fontFamily:T.f,fontSize:13,color:T.ink,background:T.surface,boxSizing:"border-box"}}>
+                <option value="laboratorial">Laboratorial</option>
+                <option value="imagem">Imagem</option>
+                <option value="clinico">Clínico</option>
+              </select>
+            </div>
+            <Textarea label="JUSTIFICATIVA CLÍNICA" value={justificativa} onChange={setJustificativa} rows={2}
+              placeholder="Ex: USPSTF Grade B, Manual MS 2024..."/>
+          </>
+        )}
+
+        {tipo==="vacinacao"&&(
+          <>
+            <div style={{display:"grid",gridTemplateColumns:"1fr 1fr",gap:10}}>
+              <Input label="DOSES TOTAIS" value={dosesTotal} onChange={setDosesTotal} type="number" placeholder="1"/>
+              <Input label="ALERTA (dias antes)" value={alertaDiasAntes} onChange={setAlertaDiasAntes} type="number" placeholder="30"/>
+            </div>
+            <label style={{display:"flex",alignItems:"center",gap:8,cursor:"pointer",padding:"10px 0",fontSize:13,color:T.ink}}>
+              <input type="checkbox" checked={decisaoCompartilhada} onChange={e=>setDecisaoCompartilhada(e.target.checked)}/>
+              Decisão compartilhada (paciente decide com médico)
+            </label>
+          </>
+        )}
+
+        <div style={{display:"flex",gap:10,justifyContent:"flex-end",marginTop:20}}>
+          <Btn variant="outline" onClick={onCancelar}>Cancelar</Btn>
+          <Btn onClick={handleSalvar} disabled={salvando||!nome.trim()}>
+            {salvando?"Salvando...":"Salvar"}
+          </Btn>
+        </div>
+      </Card>
     </div>
   );
 }
@@ -1423,6 +1711,7 @@ function TelaPacientesAdmin({apiKey,medicos=[]}){
     setLoading(true);
     const{data}=await supabase.from("pacientes")
       .select("id,nome,email,genero,data_nascimento,cargo,medico_id,created_at,medicos(nome),diagnosticos(cid,nome)")
+      .eq("ativo",true)
       .order("nome",{ascending:true});
     setPacientes(data||[]);
     setLoading(false);
@@ -2154,7 +2443,7 @@ function AbaInternacoes(){
   useEffect(()=>{
     Promise.all([
       supabase.from("internacoes").select("*,pacientes(nome),unidades_hospitalares(nome,tipo)").order("created_at",{ascending:false}),
-      supabase.from("pacientes").select("id,nome").order("nome"),
+      supabase.from("pacientes").select("id,nome").eq("ativo",true).order("nome"),
       supabase.from("unidades_hospitalares").select("*").eq("ativo",true).order("nome"),
     ]).then(([{data:int},{data:pac},{data:uni}])=>{
       setLista(int||[]);setPacientes(pac||[]);setUnidades(uni||[]);setLoading(false);
@@ -2699,7 +2988,7 @@ function AbaMensagensAdmin(){
   const bottomPacienteRef=useRef(null);
 
   useEffect(()=>{
-    supabase.from("pacientes").select("id,nome,medico_id,medicos(id,nome)").order("nome")
+    supabase.from("pacientes").select("id,nome,medico_id,medicos(id,nome)").eq("ativo",true).order("nome")
       .then(({data})=>{setPacientes(data||[]);setLoading(false);});
   },[]);
 
