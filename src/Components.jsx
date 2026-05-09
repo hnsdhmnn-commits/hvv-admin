@@ -1760,12 +1760,35 @@ function TelaPacientesAdmin({apiKey,medicos=[]}){
       cargo:p.cargo,medico:p.medicos?.nome,
       diags:(p.diagnosticos||[]).map(d=>d.cid+" "+d.nome).join(", "),
     }));
+
+    const SYSTEM_PROMPT = `Você é um assistente analítico de uma plataforma médica. Você analisa uma base de pacientes e responde a consultas administrativas/clínicas.
+
+REGRAS CRÍTICAS:
+1. Considere SEMPRE o código CID + o nome do diagnóstico. Termos médicos têm equivalentes:
+   - "Hipertensão" / "HAS" / "hipertensão arterial" / "hipertensão essencial" → todos correspondem a CID I10–I15
+   - "Diabetes" / "DM" / "DM2" / "diabetes mellitus" → CID E10–E14
+   - "Obesidade" → CID E66
+   - "Dislipidemia" / "hipercolesterolemia" → CID E78
+   - "DPOC" → CID J44
+2. Liste TODOS os pacientes que se encaixam, sem exceção. Não pule registros.
+3. Responda em português brasileiro, conciso e direto.
+4. Se a consulta retornar vazio, diga claramente "Nenhum paciente encontrado para este critério."
+5. Para cada paciente listado, mostre: nome, idade, gênero, médico responsável e diagnósticos relevantes.
+6. NÃO invente pacientes. Use apenas os dados fornecidos.`;
+
     try{
       const res=await fetch("/.netlify/functions/claude",{
         method:"POST",
         headers:{"Content-Type":"application/json","x-api-key":apiKey,"anthropic-version":"2023-06-01"},
-        body:JSON.stringify({model:"claude-sonnet-4-20250514",max_tokens:800,
-          messages:[{role:"user",content:"Analise esta base de pacientes e responda: "+iaQuery+"\n\nDados: "+JSON.stringify(resumo)}]})
+        body:JSON.stringify({
+          model:"claude-sonnet-4-20250514",
+          max_tokens:1500,
+          system:SYSTEM_PROMPT,
+          messages:[{
+            role:"user",
+            content:`Consulta: ${iaQuery}\n\nBase de pacientes (${resumo.length} registros):\n${JSON.stringify(resumo,null,2)}`
+          }]
+        })
       });
       const data=await res.json();
       setIaResultado(data.content?.[0]?.text||"Sem resposta.");
