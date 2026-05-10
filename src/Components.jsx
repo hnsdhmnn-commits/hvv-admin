@@ -1709,18 +1709,34 @@ function TelaPacientesAdmin({apiKey,medicos=[]}){
 
   const carregarTodos=async()=>{
     setLoading(true);
-    const{data,error}=await supabase.from("pacientes")
-      .select("id,nome,email,genero,data_nascimento,cargo,medico_id,created_at,medicos(nome),diagnosticos(cid,nome)")
-      .eq("ativo",true)
-      .order("nome",{ascending:true});
-    console.log("[ADMIN-DEBUG] carregarTodos →",{count:data?.length,error});
-    if(data){
+    // Plano B: carrega pacientes e diagnósticos em queries SEPARADAS e mescla no JS
+    // Motivo: o JOIN PostgREST aplica RLS de forma inconsistente, perdendo diagnósticos
+    const[{data:pacs,error:errP},{data:diags,error:errD}]=await Promise.all([
+      supabase.from("pacientes")
+        .select("id,nome,email,genero,data_nascimento,cargo,medico_id,created_at,medicos(nome)")
+        .eq("ativo",true)
+        .order("nome",{ascending:true}),
+      supabase.from("diagnosticos")
+        .select("paciente_id,cid,nome,status")
+        .eq("status","ativo"),
+    ]);
+    console.log("[ADMIN-DEBUG] carregarTodos →",{pacs:pacs?.length,diags:diags?.length,errP,errD});
+
+    // Mescla diagnósticos por paciente_id
+    const diagsPorPac={};
+    (diags||[]).forEach(d=>{
+      if(!diagsPorPac[d.paciente_id])diagsPorPac[d.paciente_id]=[];
+      diagsPorPac[d.paciente_id].push({cid:d.cid,nome:d.nome});
+    });
+    const data=(pacs||[]).map(p=>({...p,diagnosticos:diagsPorPac[p.id]||[]}));
+
+    if(data.length>0){
       const camila = data.find(p=>p.email==="camila.stone@chevo-demo.com");
       const hans   = data.find(p=>p.email==="hnsdhmnn@gmail.com");
       console.log("[ADMIN-DEBUG] camila:",camila);
       console.log("[ADMIN-DEBUG] hans:",hans);
     }
-    setPacientes(data||[]);
+    setPacientes(data);
     setLoading(false);
   };
 
