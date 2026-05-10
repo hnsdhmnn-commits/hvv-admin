@@ -179,10 +179,43 @@ async function carregarMetricasGerais(medicosFiltro=[]){
 }
 
 async function carregarMedicosDetalhes(){
-  const{data:medicos,error}=await supabase.from("medicos").select("*");
+  const{data:medicos,error}=await supabase.from("medicos").select("*").eq("ativo",true);
   console.log("[MEDICOS] data:",medicos,"error:",error);
   if(error||!medicos)return[];
-  return medicos.map(m=>({...m,totalPacientes:0,totalConsultas:0,mediaCSAT:null,adesao:null}));
+
+  // Carregar dados para calcular indicadores
+  const medicoIds=medicos.map(m=>m.id);
+  const inicio30=new Date(Date.now()-30*86400000).toISOString();
+
+  const[
+    {data:pacs},
+    {data:consultas},
+    {data:avaliacoes},
+    {data:planos},
+    {data:registros},
+  ]=await Promise.all([
+    supabase.from("pacientes").select("id,medico_id").eq("ativo",true).in("medico_id",medicoIds),
+    supabase.from("agendamentos").select("medico_id").in("medico_id",medicoIds).eq("status","realizada").gte("data",inicio30.slice(0,10)),
+    supabase.from("avaliacoes").select("medico_id,nota").in("medico_id",medicoIds).gte("created_at",inicio30),
+    supabase.from("plano_cuidado").select("id,paciente_id").eq("ativo",true),
+    supabase.from("plano_registros").select("paciente_id,status").eq("status","concluido").gte("data",inicio30.slice(0,10)),
+  ]);
+
+  return medicos.map(m=>{
+    const pacientesDoMedico=(pacs||[]).filter(p=>p.medico_id===m.id);
+    const totalPacientes=pacientesDoMedico.length;
+    const totalConsultas=(consultas||[]).filter(c=>c.medico_id===m.id).length;
+    const avals=(avaliacoes||[]).filter(a=>a.medico_id===m.id);
+    const mediaCSAT=avals.length>0?Math.round(avals.reduce((a,v)=>a+(v.nota||0),0)/avals.length*10)/10:null;
+    // Adesão = média da adesão dos pacientes do médico
+    const pacIdsDoMedico=pacientesDoMedico.map(p=>p.id);
+    const planosDoMedico=(planos||[]).filter(pl=>pacIdsDoMedico.includes(pl.paciente_id));
+    const regsDoMedico=(registros||[]).filter(r=>pacIdsDoMedico.includes(r.paciente_id));
+    // Esperado: cada plano produz ~30 registros em 30 dias (assume diário; aproximação)
+    const esperado=planosDoMedico.length*30;
+    const adesao=esperado>0?Math.min(100,Math.round((regsDoMedico.length/esperado)*100)):null;
+    return{...m,totalPacientes,totalConsultas,mediaCSAT,adesao};
+  });
 }
 
 // ─── Componentes UI ────────────────────────────────────────────────
