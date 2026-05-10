@@ -827,7 +827,7 @@ function TelaPoliticasConfig(){
                     <span>Gênero: {item.genero||"todos"}</span>
                     {item.periodicidade_meses&&<span>A cada {item.periodicidade_meses} meses</span>}
                     {item.tipo&&<span>Tipo: {item.tipo}</span>}
-                    {item.doses_total&&<span>{item.doses_total} dose(s)</span>}
+                    {item.numero_doses&&<span>{item.numero_doses} dose(s)</span>}
                     {item.alerta_dias_antes&&<span>Alerta {item.alerta_dias_antes}d antes</span>}
                   </div>
                 </div>
@@ -869,7 +869,7 @@ function FormPoliticaItem({modo,dados,tipo,onSalvar,onCancelar}){
   const[genero,setGenero]=useState(dados.genero||"todos");
   const[periodicidade,setPeriodicidade]=useState(dados.periodicidade_meses?.toString()||"");
   const[tipoR,setTipoR]=useState(dados.tipo||"laboratorial"); // só rastreamento
-  const[dosesTotal,setDosesTotal]=useState(dados.doses_total?.toString()||""); // só vacinação
+  const[dosesTotal,setDosesTotal]=useState(dados.numero_doses?.toString()||""); // só vacinação
   const[decisaoCompartilhada,setDecisaoCompartilhada]=useState(dados.decisao_compartilhada||false);
   const[alertaDiasAntes,setAlertaDiasAntes]=useState(dados.alerta_dias_antes?.toString()||"30");
   const[justificativa,setJustificativa]=useState(dados.justificativa||"");
@@ -893,7 +893,7 @@ function FormPoliticaItem({modo,dados,tipo,onSalvar,onCancelar}){
       payload.tipo=tipoR;
       payload.justificativa=justificativa.trim()||null;
     } else {
-      payload.doses_total=dosesTotal?parseInt(dosesTotal):1;
+      payload.numero_doses=dosesTotal?parseInt(dosesTotal):1;
       payload.decisao_compartilhada=decisaoCompartilhada;
       payload.alerta_dias_antes=parseInt(alertaDiasAntes)||30;
     }
@@ -1783,7 +1783,7 @@ function TelaEngajamento(){
         : Promise.resolve({data:[]}),
       supabase.from("rastreamento_registros").select("id,paciente_id,config_id,status,data_realizado,proximo_previsto").in("paciente_id",pacIds),
       empresasIds.length>0
-        ? supabase.from("vacinacao_config").select("id,empresa_id,nome,idade_inicio,idade_fim,doses_total").in("empresa_id",empresasIds).eq("ativo",true)
+        ? supabase.from("vacinacao_config").select("id,empresa_id,nome,idade_inicio,idade_fim,numero_doses").in("empresa_id",empresasIds).eq("ativo",true)
         : Promise.resolve({data:[]}),
       supabase.from("vacinacao_registros").select("id,paciente_id,config_id,status,proximo_previsto").in("paciente_id",pacIds),
       supabase.from("paciente_episodios").select("id,paciente_id,episodio_id,status").in("paciente_id",pacIds).eq("status","ativo"),
