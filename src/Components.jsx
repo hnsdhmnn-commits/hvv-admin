@@ -1709,10 +1709,17 @@ function TelaPacientesAdmin({apiKey,medicos=[]}){
 
   const carregarTodos=async()=>{
     setLoading(true);
-    const{data}=await supabase.from("pacientes")
+    const{data,error}=await supabase.from("pacientes")
       .select("id,nome,email,genero,data_nascimento,cargo,medico_id,created_at,medicos(nome),diagnosticos(cid,nome)")
       .eq("ativo",true)
       .order("nome",{ascending:true});
+    console.log("[ADMIN-DEBUG] carregarTodos →",{count:data?.length,error});
+    if(data){
+      const camila = data.find(p=>p.email==="camila.stone@chevo-demo.com");
+      const hans   = data.find(p=>p.email==="hnsdhmnn@gmail.com");
+      console.log("[ADMIN-DEBUG] camila:",camila);
+      console.log("[ADMIN-DEBUG] hans:",hans);
+    }
     setPacientes(data||[]);
     setLoading(false);
   };
