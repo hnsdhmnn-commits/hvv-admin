@@ -1041,8 +1041,8 @@ function FormEpisodio({apiKey,onSalvo,onCancelar}){
     try{
       const promptBase = "Voce e especialista em medicina baseada em evidencias e ICHOM. Para a condicao: CID "+cidTxt+" / "+nomeTxt+" com duracao "+duracao+" meses, crie um protocolo clinico. ";
       const promptFormato = "RETORNE APENAS JSON VALIDO. NAO use markdown, NAO use \\\\\\\\, NAO use aspas duplas dentro de strings (use simples ou parafraseie), NAO use quebras de linha dentro de strings, NAO use trailing commas. ";
-      const promptSchema = "Formato exato: {\"ichom_set\":\"nome\",\"ichom_url\":\"url ou string vazia\",\"etapas\":[{\"titulo\":\"texto\",\"tipo\":\"consulta\",\"dia\":0,\"responsavel\":\"medico\",\"descricao\":\"texto curto sem aspas duplas\",\"unidade\":\"\",\"meta\":\"\",\"intermediario\":true}]}. ";
-      const promptRegras = "Tipos validos: consulta, exame, medicamento, estilo_vida, questionario, desfecho_clinico, desfecho_pro. Responsaveis: medico, paciente, ana, equipe. dia = inteiro (0=inicio 30=1mes 90=3meses 180=6meses 365=12meses). Inclua 8 a 15 etapas ordenadas por dia. Para desfechos preencha unidade e meta.";
+      const promptSchema = "Formato exato: {\"cid_sugerido\":\"codigo CID-10 mais apropriado, ex E11.9\",\"ichom_set\":\"nome\",\"ichom_url\":\"url ou string vazia\",\"etapas\":[{\"titulo\":\"texto\",\"tipo\":\"consulta\",\"dia\":0,\"responsavel\":\"medico\",\"descricao\":\"texto curto sem aspas duplas\",\"unidade\":\"\",\"meta\":\"\",\"intermediario\":true}]}. ";
+      const promptRegras = "Tipos validos: consulta, exame, medicamento, estilo_vida, questionario, desfecho_clinico, desfecho_pro. Responsaveis: medico, paciente, ana, equipe. dia = inteiro (0=inicio 30=1mes 90=3meses 180=6meses 365=12meses). Inclua 8 a 15 etapas ordenadas por dia. Para desfechos preencha unidade e meta. cid_sugerido obrigatorio mesmo se cid foi informado pelo usuario, escolha o mais apropriado da CID-10.";
       const res=await fetch("/.netlify/functions/claude",{
         method:"POST",
         headers:{"Content-Type":"application/json","x-api-key":apiKey,"anthropic-version":"2023-06-01"},
@@ -1100,6 +1100,10 @@ function FormEpisodio({apiKey,onSalvo,onCancelar}){
         }
       }
       setSugestao(parsed);
+      // Sempre que IA sugerir CID válido, atualiza o campo (sobrescreve se o que está lá não bate ou está vazio)
+      if(parsed.cid_sugerido&&parsed.cid_sugerido.match(/^[A-Z][0-9]{2}/i)){
+        setCid(parsed.cid_sugerido.toUpperCase());
+      }
       setEtapas((parsed.etapas||[]).map((e,i)=>({...e,id:"temp_"+i,incluir:true})));
     }catch(e){
       console.warn("[IA-EPISODIO] Erro de rede/API:",e);
@@ -1133,10 +1137,12 @@ function FormEpisodio({apiKey,onSalvo,onCancelar}){
     setSalvando(true);setErro("");
     try{
       // Salvar episódio
+      // CID: prioriza o que o usuário tem no campo; fallback para sugestão da IA
+      const cidFinal = (cid.trim().toUpperCase()) || (sugestao?.cid_sugerido?.toUpperCase()) || null;
       const{data:ep,error}=await supabase.from("episodios").insert({
         nome:nome.trim(),
         descricao:descricao.trim()||null,
-        cid_principal:cid.trim().toUpperCase()||null,
+        cid_principal:cidFinal,
         duracao_meses:Number(duracao),
         renovavel,
         tipo:"institucional",
