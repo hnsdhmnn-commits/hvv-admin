@@ -2418,7 +2418,7 @@ REGRAS CRÍTICAS:
         setModalCadastro(false);setSucesso(false);
         setNome("");setEmail("");setSenha("");setMedicoId("");setEmpresaId("");
         setGenero("");setDataNasc("");setCargo("");
-      },1500);
+      },5000);
     }catch(e){
       setErro("Erro de rede: "+(e.message||"desconhecido"));
     }
@@ -2580,10 +2580,22 @@ REGRAS CRÍTICAS:
             <div style={{fontSize:13,color:T.inkMid,marginBottom:24}}>O paciente só poderá acessar o app após o cadastro aqui.</div>
 
             {sucesso?(
-              <div style={{textAlign:"center",padding:"20px 0"}}>
+              <div style={{textAlign:"center",padding:"24px 0"}}>
                 <div style={{fontSize:40,marginBottom:12}}>✅</div>
-                <div style={{fontSize:16,fontWeight:500,color:T.green}}>Paciente cadastrado!</div>
-                <div style={{fontSize:13,color:T.inkMid,marginTop:6}}>Ele já pode criar sua conta no app.</div>
+                <div style={{fontSize:16,fontWeight:500,color:T.green,marginBottom:10}}>Paciente cadastrado!</div>
+                <div style={{fontSize:13,color:T.inkMid,marginBottom:14,lineHeight:1.5}}>
+                  Conta de acesso criada com sucesso.<br/>
+                  Compartilhe os dados de acesso com o paciente:
+                </div>
+                <div style={{background:T.bg,border:`1px solid ${T.border}`,borderRadius:8,padding:"12px 14px",margin:"0 auto",maxWidth:320,textAlign:"left"}}>
+                  <div style={{fontSize:11,color:T.inkFaint,marginBottom:2}}>E-mail</div>
+                  <div style={{fontSize:13,color:T.ink,marginBottom:8,fontFamily:"monospace"}}>{email}</div>
+                  <div style={{fontSize:11,color:T.inkFaint,marginBottom:2}}>Senha inicial</div>
+                  <div style={{fontSize:13,color:T.ink,fontFamily:"monospace"}}>{senha}</div>
+                </div>
+                <div style={{fontSize:11,color:T.inkFaint,marginTop:14,fontStyle:"italic"}}>
+                  Esta janela fechará em alguns segundos.
+                </div>
               </div>
             ):(
               <>
