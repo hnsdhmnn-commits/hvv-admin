@@ -2915,9 +2915,9 @@ function AbaInternacoes(){
 
   useEffect(()=>{
     Promise.all([
-      supabase.from("internacoes").select("*,pacientes(nome),unidades_hospitalares(nome,tipo)").order("created_at",{ascending:false}),
+      supabase.from("internacoes").select("*,pacientes(nome),unidades_atendimento(nome,tipo_relacao)").order("created_at",{ascending:false}),
       supabase.from("pacientes").select("id,nome").eq("ativo",true).order("nome"),
-      supabase.from("unidades_hospitalares").select("*").eq("ativo",true).order("nome"),
+      supabase.from("unidades_atendimento").select("*").eq("ativo",true).order("nome"),
     ]).then(([{data:int},{data:pac},{data:uni}])=>{
       setLista(int||[]);setPacientes(pac||[]);setUnidades(uni||[]);setLoading(false);
     });
@@ -2932,7 +2932,7 @@ function AbaInternacoes(){
     }else{
       await supabase.from("internacoes").insert(dados);
     }
-    const{data}=await supabase.from("internacoes").select("*,pacientes(nome),unidades_hospitalares(nome,tipo)").order("created_at",{ascending:false});
+    const{data}=await supabase.from("internacoes").select("*,pacientes(nome),unidades_atendimento(nome,tipo_relacao)").order("created_at",{ascending:false});
     setLista(data||[]);setMostrarForm(false);setEditando(null);
   };
 
@@ -2971,7 +2971,7 @@ function AbaInternacoes(){
                   </div>
                   <div style={{display:"flex",gap:16,flexWrap:"wrap",fontSize:12,color:T.inkMid}}>
                     {i.senha_internacao&&<span>Senha: <strong>{i.senha_internacao}</strong></span>}
-                    <span>Unidade: {i.unidades_hospitalares?.nome||i.unidade_texto||"—"}</span>
+                    <span>Unidade: {i.unidades_atendimento?.nome||i.unidade_texto||"—"}</span>
                     {i.unidade_telefone&&<span>Tel: {i.unidade_telefone}</span>}
                     <span>Internação: {i.data_internacao}</span>
                     {i.data_prevista_alta&&<span>Prev. alta: {i.data_prevista_alta}</span>}
@@ -3081,7 +3081,7 @@ function AbaPS(){
   useEffect(()=>{
     Promise.all([
       supabase.from("encaminhamentos").select("*,pacientes(nome),medicos(nome)").eq("tipo","ps").order("created_at",{ascending:false}),
-      supabase.from("unidades_hospitalares").select("*").eq("ativo",true).order("nome"),
+      supabase.from("unidades_atendimento").select("*").eq("ativo",true).order("nome"),
     ]).then(([{data:enc},{data:uni}])=>{setLista(enc||[]);setUnidades(uni||[]);setLoading(false);});
   },[]);
 
