@@ -1774,19 +1774,27 @@ function TelaEngajamento(){
 
   // Carregar empresas, médicos e CIDs (auto-recarrega junto com os dados)
   const carregarListasFixas=async()=>{
+    // Buscar diagnósticos só de pacientes ativos
+    const{data:pacsAtivos}=await supabase.from("pacientes").select("id").eq("ativo",true);
+    const pacsAtivosIds=(pacsAtivos||[]).map(p=>p.id);
     const[{data:emps},{data:meds},{data:diags}]=await Promise.all([
       supabase.from("empresas").select("id,nome").order("nome"),
       supabase.from("medicos").select("id,nome").eq("ativo",true).order("nome"),
-      supabase.from("diagnosticos").select("cid,nome"),
+      pacsAtivosIds.length>0
+        ? supabase.from("diagnosticos").select("cid,nome,paciente_id").in("paciente_id",pacsAtivosIds)
+        : Promise.resolve({data:[]}),
     ]);
     setEmpresas(emps||[]);
     setMedicos(meds||[]);
+    // Agrupar CIDs únicos, contando pacientes DISTINTOS (não diagnósticos)
     const cidsMap={};
     (diags||[]).forEach(d=>{
-      if(!cidsMap[d.cid])cidsMap[d.cid]={cid:d.cid,nome:d.nome,qtd:0};
-      cidsMap[d.cid].qtd++;
+      if(!cidsMap[d.cid])cidsMap[d.cid]={cid:d.cid,nome:d.nome,pacientes:new Set()};
+      cidsMap[d.cid].pacientes.add(d.paciente_id);
     });
-    const cidsList=Object.values(cidsMap).sort((a,b)=>b.qtd-a.qtd);
+    const cidsList=Object.values(cidsMap)
+      .map(c=>({cid:c.cid,nome:c.nome,qtd:c.pacientes.size}))
+      .sort((a,b)=>b.qtd-a.qtd);
     setCidsDisponiveis(cidsList);
   };
 
@@ -1879,36 +1887,25 @@ function TelaEngajamento(){
     const periodoInicio=new Date(); periodoInicio.setDate(periodoInicio.getDate()-periodo);
     let esp=0;
     let feitos=0;
-    const debug=[];
     planoP.forEach(t=>{
       const criadoEmDate=t.created_at?new Date(t.created_at.slice(0,10)+"T00:00:00"):periodoInicio;
-      // Pegar registros da tarefa (todos)
       const regsTodos=dados.registros.filter(r=>
         r.paciente_id===p.id&&r.tarefa_id===t.id&&r.status==="concluido"
       );
-      // Início efetivo = MIN(criado, primeiro registro) — paciente pode ter histórico anterior
       let inicioEfetivo=criadoEmDate;
       if(regsTodos.length>0){
         const datas=regsTodos.map(r=>new Date(r.data+"T12:00:00")).sort((a,b)=>a-b);
         if(datas[0]<inicioEfetivo)inicioEfetivo=datas[0];
       }
-      // MAX(inicioEfetivo, periodoInicio) — não considerar antes do período selecionado
       const inicioReal=inicioEfetivo>periodoInicio?inicioEfetivo:periodoInicio;
       const diasReais=Math.max(1,Math.ceil((hoje-inicioReal)/86400000));
       const semanasReais=Math.max(1/7,diasReais/7);
-      let espTarefa=0;
-      if(t.frequencia_tipo==="diario")espTarefa=diasReais;
-      else if(t.frequencia_tipo==="n_vezes_semana")espTarefa=(t.meta_semanal||3)*semanasReais;
-      else if(t.frequencia_tipo==="uma_vez_semana")espTarefa=semanasReais;
-      esp+=espTarefa;
+      if(t.frequencia_tipo==="diario")esp+=diasReais;
+      else if(t.frequencia_tipo==="n_vezes_semana")esp+=(t.meta_semanal||3)*semanasReais;
+      else if(t.frequencia_tipo==="uma_vez_semana")esp+=semanasReais;
       const inicioRealStr=inicioReal.toISOString().slice(0,10);
-      const regsDentroJanela=regsTodos.filter(r=>r.data>=inicioRealStr);
-      feitos+=regsDentroJanela.length;
-      debug.push({tarefa_id:t.id.slice(0,8),freq:t.frequencia_tipo,criadoEm:t.created_at?.slice(0,10),inicioReal:inicioRealStr,esp:espTarefa.toFixed(1),feitosCount:regsDentroJanela.length});
+      feitos+=regsTodos.filter(r=>r.data>=inicioRealStr).length;
     });
-    if(p.email==="roberto.stone@chevo-demo.com"||p.email==="camila.stone@chevo-demo.com"){
-      console.log("[ADESAO-DEBUG]",p.nome,{esp:esp.toFixed(1),feitos,debug});
-    }
     const adesao=esp>0?Math.min(100,Math.round((feitos/esp)*100)):null;
     return{...p,adesao,esperado:Math.round(esp),feitos};
   });
@@ -2277,7 +2274,6 @@ function TelaPacientesAdmin({apiKey,medicos=[]}){
         .select("paciente_id,cid,nome,status")
         .eq("status","ativo"),
     ]);
-    console.log("[ADMIN-DEBUG] carregarTodos →",{pacs:pacs?.length,diags:diags?.length,errP,errD});
 
     // Mescla diagnósticos por paciente_id
     const diagsPorPac={};
@@ -2287,12 +2283,6 @@ function TelaPacientesAdmin({apiKey,medicos=[]}){
     });
     const data=(pacs||[]).map(p=>({...p,diagnosticos:diagsPorPac[p.id]||[]}));
 
-    if(data.length>0){
-      const camila = data.find(p=>p.email==="camila.stone@chevo-demo.com");
-      const hans   = data.find(p=>p.email==="hnsdhmnn@gmail.com");
-      console.log("[ADMIN-DEBUG] camila:",camila);
-      console.log("[ADMIN-DEBUG] hans:",hans);
-    }
     setPacientes(data);
     setLoading(false);
   };
