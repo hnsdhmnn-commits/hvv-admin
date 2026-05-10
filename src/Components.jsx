@@ -2069,10 +2069,18 @@ function TelaPacientesAdmin({apiKey,medicos=[]}){
   // Campos cadastro
   const[nome,setNome]=useState("");
   const[email,setEmail]=useState("");
+  const[senha,setSenha]=useState("");
   const[medicoId,setMedicoId]=useState("");
+  const[empresaId,setEmpresaId]=useState("");
   const[genero,setGenero]=useState("");
   const[dataNasc,setDataNasc]=useState("");
   const[cargo,setCargo]=useState("");
+  const[empresasCadastro,setEmpresasCadastro]=useState([]);
+  useEffect(()=>{
+    supabase.from("empresas").select("id,nome").order("nome").then(({data})=>{
+      setEmpresasCadastro(data||[]);
+    });
+  },[]);
   // IA Query
   const[iaQuery,setIaQuery]=useState("");
   const[iaResultado,setIaResultado]=useState("");
@@ -2196,22 +2204,64 @@ REGRAS CRÍTICAS:
     if(!nome.trim()||!email.trim()||!medicoId){
       setErro("Nome, e-mail e médico são obrigatórios.");return;
     }
+    if(!senha||senha.length<6){
+      setErro("Senha obrigatória, mínimo 6 caracteres.");return;
+    }
     setSalvando(true);setErro("");
-    // Verificar se email já existe
-    const{data:existente}=await supabase.from("pacientes").select("id").eq("email",email.trim()).single();
-    if(existente){setErro("Este e-mail já está cadastrado.");setSalvando(false);return;}
-    const{error}=await supabase.from("pacientes").insert({
-      nome:nome.trim(),email:email.trim(),medico_id:medicoId,
-      genero:genero||null,data_nascimento:dataNasc||null,cargo:cargo||null,
-      ativo:true,empresa_id:null,
-    });
-    if(error){setErro(error.message);setSalvando(false);return;}
-    setSucesso(true);
-    carregarTodos();
-    setTimeout(()=>{
-      setModalCadastro(false);setSucesso(false);
-      setNome("");setEmail("");setMedicoId("");setGenero("");setDataNasc("");setCargo("");
-    },1500);
+    try{
+      // 1. Verificar se email já existe em pacientes
+      const{data:existente}=await supabase.from("pacientes").select("id").eq("email",email.trim()).maybeSingle();
+      if(existente){setErro("Este e-mail já está cadastrado em pacientes.");setSalvando(false);return;}
+
+      // 2. Criar usuário no auth via signUp
+      const{data:authData,error:authErr}=await supabase.auth.signUp({
+        email:email.trim(),
+        password:senha,
+        options:{
+          data:{nome:nome.trim()},
+          emailRedirectTo:undefined, // sem confirmação por email
+        },
+      });
+      if(authErr){
+        setErro("Erro ao criar acesso: "+authErr.message);
+        setSalvando(false);
+        return;
+      }
+      const userId=authData?.user?.id;
+      if(!userId){
+        setErro("Falha ao obter user_id após signUp. Verifique se o e-mail é válido.");
+        setSalvando(false);
+        return;
+      }
+
+      // 3. Inserir paciente vinculado ao user_id e empresa
+      const{error:pacErr}=await supabase.from("pacientes").insert({
+        user_id:userId,
+        nome:nome.trim(),
+        email:email.trim(),
+        medico_id:medicoId,
+        empresa_id:empresaId||null,
+        genero:genero||null,
+        data_nascimento:dataNasc||null,
+        cargo:cargo||null,
+        ativo:true,
+      });
+      if(pacErr){
+        setErro("Erro ao criar paciente: "+pacErr.message);
+        setSalvando(false);
+        return;
+      }
+
+      setSucesso(true);
+      carregarTodos();
+      setTimeout(()=>{
+        setModalCadastro(false);setSucesso(false);
+        setNome("");setEmail("");setSenha("");setMedicoId("");setEmpresaId("");
+        setGenero("");setDataNasc("");setCargo("");
+      },1500);
+    }catch(e){
+      setErro("Erro inesperado: "+(e.message||"desconhecido"));
+    }
     setSalvando(false);
   };
 
@@ -2388,12 +2438,28 @@ REGRAS CRÍTICAS:
                     style={{width:"100%",padding:"10px 12px",border:"0.5px solid "+T.border,borderRadius:8,fontFamily:T.f,fontSize:13,outline:"none"}}/>
                 </div>
                 <div style={{marginBottom:12}}>
-                  <div style={{fontSize:11,fontWeight:500,color:T.inkMid,marginBottom:5}}>MÉDICO RESPONSÁVEL *</div>
-                  <select value={medicoId} onChange={e=>setMedicoId(e.target.value)}
-                    style={{width:"100%",padding:"10px 12px",border:"0.5px solid "+T.border,borderRadius:8,fontFamily:T.f,fontSize:13,outline:"none",background:T.surface}}>
-                    <option value="">Selecionar médico...</option>
-                    {medicos.map(m=><option key={m.id} value={m.id}>{m.nome}</option>)}
-                  </select>
+                  <div style={{fontSize:11,fontWeight:500,color:T.inkMid,marginBottom:5}}>SENHA INICIAL * (mínimo 6 caracteres)</div>
+                  <input type="text" value={senha} onChange={e=>setSenha(e.target.value)} placeholder="Senha que o paciente usará no primeiro acesso"
+                    style={{width:"100%",padding:"10px 12px",border:"0.5px solid "+T.border,borderRadius:8,fontFamily:T.f,fontSize:13,outline:"none"}}/>
+                  <div style={{fontSize:10,color:T.inkFaint,marginTop:4}}>O paciente poderá alterar depois. Anote para enviar a ele.</div>
+                </div>
+                <div style={{display:"grid",gridTemplateColumns:"1fr 1fr",gap:10,marginBottom:12}}>
+                  <div>
+                    <div style={{fontSize:11,fontWeight:500,color:T.inkMid,marginBottom:5}}>MÉDICO *</div>
+                    <select value={medicoId} onChange={e=>setMedicoId(e.target.value)}
+                      style={{width:"100%",padding:"10px 12px",border:"0.5px solid "+T.border,borderRadius:8,fontFamily:T.f,fontSize:13,outline:"none",background:T.surface}}>
+                      <option value="">Selecionar...</option>
+                      {medicos.map(m=><option key={m.id} value={m.id}>{m.nome}</option>)}
+                    </select>
+                  </div>
+                  <div>
+                    <div style={{fontSize:11,fontWeight:500,color:T.inkMid,marginBottom:5}}>EMPRESA</div>
+                    <select value={empresaId} onChange={e=>setEmpresaId(e.target.value)}
+                      style={{width:"100%",padding:"10px 12px",border:"0.5px solid "+T.border,borderRadius:8,fontFamily:T.f,fontSize:13,outline:"none",background:T.surface}}>
+                      <option value="">Sem empresa</option>
+                      {empresasCadastro.map(emp=><option key={emp.id} value={emp.id}>{emp.nome}</option>)}
+                    </select>
+                  </div>
                 </div>
                 <div style={{display:"grid",gridTemplateColumns:"1fr 1fr",gap:10,marginBottom:12}}>
                   <div>
