@@ -1881,8 +1881,19 @@ function TelaEngajamento(){
     let feitos=0;
     const debug=[];
     planoP.forEach(t=>{
-      const criadoEm=t.created_at?new Date(t.created_at):periodoInicio;
-      const inicioReal=criadoEm>periodoInicio?criadoEm:periodoInicio;
+      const criadoEmDate=t.created_at?new Date(t.created_at.slice(0,10)+"T00:00:00"):periodoInicio;
+      // Pegar registros da tarefa (todos)
+      const regsTodos=dados.registros.filter(r=>
+        r.paciente_id===p.id&&r.tarefa_id===t.id&&r.status==="concluido"
+      );
+      // Início efetivo = MIN(criado, primeiro registro) — paciente pode ter histórico anterior
+      let inicioEfetivo=criadoEmDate;
+      if(regsTodos.length>0){
+        const datas=regsTodos.map(r=>new Date(r.data+"T12:00:00")).sort((a,b)=>a-b);
+        if(datas[0]<inicioEfetivo)inicioEfetivo=datas[0];
+      }
+      // MAX(inicioEfetivo, periodoInicio) — não considerar antes do período selecionado
+      const inicioReal=inicioEfetivo>periodoInicio?inicioEfetivo:periodoInicio;
       const diasReais=Math.max(1,Math.ceil((hoje-inicioReal)/86400000));
       const semanasReais=Math.max(1/7,diasReais/7);
       let espTarefa=0;
@@ -1891,14 +1902,12 @@ function TelaEngajamento(){
       else if(t.frequencia_tipo==="uma_vez_semana")espTarefa=semanasReais;
       esp+=espTarefa;
       const inicioRealStr=inicioReal.toISOString().slice(0,10);
-      const regsTarefa=dados.registros.filter(r=>
-        r.paciente_id===p.id&&r.tarefa_id===t.id&&r.status==="concluido"&&r.data>=inicioRealStr
-      );
-      feitos+=regsTarefa.length;
-      debug.push({tarefa_id:t.id.slice(0,8),freq:t.frequencia_tipo,criadoEm:t.created_at?.slice(0,10),inicioReal:inicioRealStr,esp:espTarefa.toFixed(1),feitosCount:regsTarefa.length,sample:regsTarefa[0]?.data});
+      const regsDentroJanela=regsTodos.filter(r=>r.data>=inicioRealStr);
+      feitos+=regsDentroJanela.length;
+      debug.push({tarefa_id:t.id.slice(0,8),freq:t.frequencia_tipo,criadoEm:t.created_at?.slice(0,10),inicioReal:inicioRealStr,esp:espTarefa.toFixed(1),feitosCount:regsDentroJanela.length});
     });
     if(p.email==="roberto.stone@chevo-demo.com"||p.email==="camila.stone@chevo-demo.com"){
-      console.log("[ADESAO-DEBUG]",p.nome,{esp:esp.toFixed(1),feitos,registrosTotalDoPac:dados.registros.filter(r=>r.paciente_id===p.id).length,debug});
+      console.log("[ADESAO-DEBUG]",p.nome,{esp:esp.toFixed(1),feitos,debug});
     }
     const adesao=esp>0?Math.min(100,Math.round((feitos/esp)*100)):null;
     return{...p,adesao,esperado:Math.round(esp),feitos};
