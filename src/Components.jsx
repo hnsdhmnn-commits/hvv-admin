@@ -196,7 +196,7 @@ async function carregarMedicosDetalhes(){
   ]=await Promise.all([
     supabase.from("pacientes").select("id,medico_id").eq("ativo",true).in("medico_id",medicoIds),
     supabase.from("agendamentos").select("medico_id").in("medico_id",medicoIds).eq("status","realizada").gte("data",inicio30.slice(0,10)),
-    supabase.from("avaliacoes").select("medico_id,nota").in("medico_id",medicoIds).gte("created_at",inicio30),
+    supabase.from("avaliacoes").select("medico_id,nota_csat").in("medico_id",medicoIds).gte("created_at",inicio30),
     supabase.from("plano_cuidado").select("id,paciente_id").eq("ativo",true),
     supabase.from("plano_registros").select("paciente_id,status").eq("status","concluido").gte("data",inicio30.slice(0,10)),
   ]);
@@ -206,7 +206,7 @@ async function carregarMedicosDetalhes(){
     const totalPacientes=pacientesDoMedico.length;
     const totalConsultas=(consultas||[]).filter(c=>c.medico_id===m.id).length;
     const avals=(avaliacoes||[]).filter(a=>a.medico_id===m.id);
-    const mediaCSAT=avals.length>0?Math.round(avals.reduce((a,v)=>a+(v.nota||0),0)/avals.length*10)/10:null;
+    const mediaCSAT=avals.length>0?Math.round(avals.reduce((a,v)=>a+(v.nota_csat||0),0)/avals.length*10)/10:null;
     // Adesão = média da adesão dos pacientes do médico
     const pacIdsDoMedico=pacientesDoMedico.map(p=>p.id);
     const planosDoMedico=(planos||[]).filter(pl=>pacIdsDoMedico.includes(pl.paciente_id));
