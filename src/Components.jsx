@@ -304,6 +304,7 @@ export function AppAdmin({admin,apiKey,onLogout}){
 
   const MENU=[
     {id:"metricas",label:"Métricas",icon:"📊"},
+    {id:"engajamento",label:"Engajamento",icon:"💚"},
     {id:"pacientes",label:"Pacientes",icon:"👥"},
     {id:"episodios",label:"Episódios Clínicos",icon:"🏥"},
     {id:"politicas",label:"Políticas de Cuidado",icon:"📋"},
@@ -387,6 +388,7 @@ export function AppAdmin({admin,apiKey,onLogout}){
       {/* Conteúdo */}
       <div style={{flex:1,overflowY:"auto"}}>
         {tela==="metricas"&&<TelaMetricas medicosFiltro={medicosFiltroAtivos}/>}
+        {tela==="engajamento"&&<TelaEngajamento/>}
         {tela==="pacientes"&&<TelaPacientesAdmin apiKey={apiKey} medicos={todosMedicos}/>}
         {tela==="episodios"&&<TelaEpisodios apiKey={apiKey}/>}
         {tela==="politicas"&&<TelaPoliticasConfig/>}
@@ -1715,6 +1717,322 @@ function FormEtapa({episodioId,duracaoMeses,apiKey,onSalvo,onCancelar}){
         </Btn>
       </div>
     </Card>
+  );
+}
+
+// ─── Tela Engajamento (CHEVO MASTER — coração da plataforma) ──────
+function TelaEngajamento(){
+  const[loading,setLoading]=useState(true);
+  const[empresas,setEmpresas]=useState([]);
+  const[empresaSel,setEmpresaSel]=useState("todas"); // "todas" | uuid
+  const[periodo,setPeriodo]=useState(30); // dias
+  const[dados,setDados]=useState({
+    pacientes:[],
+    plano:[],
+    registros:[],
+    rastreamentoConfig:[],
+    rastreamentoRegistros:[],
+    vacinacaoConfig:[],
+    vacinacaoRegistros:[],
+    episodiosAtivos:[],
+  });
+
+  // Carregar empresas (1 vez)
+  useEffect(()=>{
+    supabase.from("empresas").select("id,nome").order("nome").then(({data})=>{
+      setEmpresas(data||[]);
+    });
+  },[]);
+
+  // Carregar dados conforme filtros
+  const recarregar=async()=>{
+    setLoading(true);
+    const inicio=new Date();inicio.setDate(inicio.getDate()-periodo);
+    const inicioStr=inicio.toISOString().slice(0,10);
+
+    // Filtro de pacientes por empresa
+    let qPacientes=supabase.from("pacientes").select("id,nome,email,empresa_id,medico_id,ativo,data_nascimento").eq("ativo",true);
+    if(empresaSel!=="todas")qPacientes=qPacientes.eq("empresa_id",empresaSel);
+    const{data:pacs}=await qPacientes;
+    const pacIds=(pacs||[]).map(p=>p.id);
+
+    if(pacIds.length===0){
+      setDados({pacientes:[],plano:[],registros:[],rastreamentoConfig:[],rastreamentoRegistros:[],vacinacaoConfig:[],vacinacaoRegistros:[],episodiosAtivos:[]});
+      setLoading(false);
+      return;
+    }
+
+    // Empresas IDs aplicáveis (pra buscar configs corretas)
+    const empresasIds = empresaSel==="todas"
+      ? [...new Set((pacs||[]).map(p=>p.empresa_id).filter(Boolean))]
+      : [empresaSel];
+
+    const[
+      {data:plano},
+      {data:registros},
+      {data:rastConfig},
+      {data:rastRegs},
+      {data:vacConfig},
+      {data:vacRegs},
+      {data:epAtivos},
+    ]=await Promise.all([
+      supabase.from("plano_cuidado").select("id,paciente_id,frequencia_tipo,meta_semanal,ativo,categoria,origem").in("paciente_id",pacIds).eq("ativo",true),
+      supabase.from("plano_registros").select("paciente_id,tarefa_id,data,status").in("paciente_id",pacIds).gte("data",inicioStr),
+      empresasIds.length>0
+        ? supabase.from("rastreamento_config").select("id,empresa_id,nome,idade_inicio,idade_fim,genero,periodicidade_meses").in("empresa_id",empresasIds).eq("ativo",true)
+        : Promise.resolve({data:[]}),
+      supabase.from("rastreamento_registros").select("id,paciente_id,config_id,status,data_realizado,proximo_previsto").in("paciente_id",pacIds),
+      empresasIds.length>0
+        ? supabase.from("vacinacao_config").select("id,empresa_id,nome,idade_inicio,idade_fim,doses_total").in("empresa_id",empresasIds).eq("ativo",true)
+        : Promise.resolve({data:[]}),
+      supabase.from("vacinacao_registros").select("id,paciente_id,config_id,status,proximo_previsto").in("paciente_id",pacIds),
+      supabase.from("paciente_episodios").select("id,paciente_id,episodio_id,status").in("paciente_id",pacIds).eq("status","ativo"),
+    ]);
+
+    setDados({
+      pacientes:pacs||[],
+      plano:plano||[],
+      registros:registros||[],
+      rastreamentoConfig:rastConfig||[],
+      rastreamentoRegistros:rastRegs||[],
+      vacinacaoConfig:vacConfig||[],
+      vacinacaoRegistros:vacRegs||[],
+      episodiosAtivos:epAtivos||[],
+    });
+    setLoading(false);
+  };
+
+  useEffect(()=>{recarregar();},[empresaSel,periodo]);
+
+  // ─── CÁLCULOS ────────────────────────────────────────────────────
+  const calcIdade=(dn)=>dn?Math.floor((new Date()-new Date(dn))/(365.25*24*3600*1000)):null;
+
+  // Adesão por paciente (mesma fórmula do médico)
+  const adesaoPorPaciente=dados.pacientes.map(p=>{
+    const planoP=dados.plano.filter(t=>t.paciente_id===p.id);
+    const regsP=dados.registros.filter(r=>r.paciente_id===p.id&&r.status==="concluido");
+    if(planoP.length===0)return{...p,adesao:null,esperado:0,feitos:0};
+    const semanas = periodo/7;
+    const esp = planoP.reduce((acc,t)=>{
+      if(t.frequencia_tipo==="diario")return acc+periodo;
+      if(t.frequencia_tipo==="n_vezes_semana")return acc+(t.meta_semanal||3)*semanas;
+      if(t.frequencia_tipo==="uma_vez_semana")return acc+semanas;
+      return acc;
+    },0);
+    const adesao=esp>0?Math.min(100,Math.round((regsP.length/esp)*100)):null;
+    return{...p,adesao,esperado:Math.round(esp),feitos:regsP.length};
+  });
+
+  // Adesão geral da carteira
+  const pacientesComPlano=adesaoPorPaciente.filter(p=>p.adesao!==null);
+  const adesaoGeral = pacientesComPlano.length>0
+    ? Math.round(pacientesComPlano.reduce((acc,p)=>acc+p.adesao,0)/pacientesComPlano.length)
+    : null;
+
+  // Rastreamento em dia
+  // Para cada paciente aplicável a cada config, está em dia?
+  const rastreamentoStats=(()=>{
+    let aplicaveis=0;
+    let emDia=0;
+    dados.pacientes.forEach(p=>{
+      const idade=calcIdade(p.data_nascimento);
+      if(idade==null)return;
+      dados.rastreamentoConfig.forEach(rc=>{
+        if(rc.empresa_id!==p.empresa_id)return;
+        if(idade<rc.idade_inicio)return;
+        if(rc.idade_fim&&idade>rc.idade_fim)return;
+        aplicaveis++;
+        // Está em dia? Tem registro com status='realizado' e proximo_previsto > hoje
+        const reg=dados.rastreamentoRegistros.find(r=>r.paciente_id===p.id&&r.config_id===rc.id);
+        if(reg&&reg.status==="realizado"&&(!reg.proximo_previsto||new Date(reg.proximo_previsto)>new Date())){
+          emDia++;
+        }
+      });
+    });
+    const pct=aplicaveis>0?Math.round((emDia/aplicaveis)*100):null;
+    return{pct,aplicaveis,emDia};
+  })();
+
+  // Vacinação em dia
+  const vacinacaoStats=(()=>{
+    let aplicaveis=0;
+    let emDia=0;
+    dados.pacientes.forEach(p=>{
+      const idade=calcIdade(p.data_nascimento);
+      if(idade==null)return;
+      dados.vacinacaoConfig.forEach(vc=>{
+        if(vc.empresa_id!==p.empresa_id)return;
+        if(idade<vc.idade_inicio)return;
+        if(vc.idade_fim&&idade>vc.idade_fim)return;
+        aplicaveis++;
+        const reg=dados.vacinacaoRegistros.find(r=>r.paciente_id===p.id&&r.config_id===vc.id);
+        if(reg&&reg.status==="aplicada"&&(!reg.proximo_previsto||new Date(reg.proximo_previsto)>new Date())){
+          emDia++;
+        }
+      });
+    });
+    const pct=aplicaveis>0?Math.round((emDia/aplicaveis)*100):null;
+    return{pct,aplicaveis,emDia};
+  })();
+
+  // Episódios ativos
+  const episodiosAtivosCount=dados.episodiosAtivos.length;
+  const pacientesComEpisodio=new Set(dados.episodiosAtivos.map(e=>e.paciente_id)).size;
+
+  // Top 10 piores em adesão (descartando sem plano)
+  const piores=pacientesComPlano.sort((a,b)=>a.adesao-b.adesao).slice(0,10);
+
+  const corAdesao=(pct)=>pct==null?T.inkFaint:pct<40?T.red:pct<60?T.orange:T.green;
+
+  // ─── RENDER ──────────────────────────────────────────────────────
+  return(
+    <div style={{padding:"28px 32px",maxWidth:1200,margin:"0 auto"}}>
+      <div style={{marginBottom:24}}>
+        <div style={{fontSize:22,fontWeight:600,color:T.ink,marginBottom:6}}>Engajamento</div>
+        <div style={{fontSize:13,color:T.inkMid}}>
+          Visão consolidada de adesão, rastreamento e vacinação da carteira.
+        </div>
+      </div>
+
+      {/* FILTROS */}
+      <div style={{display:"flex",gap:14,alignItems:"center",marginBottom:20,flexWrap:"wrap"}}>
+        <div style={{display:"flex",alignItems:"center",gap:8}}>
+          <span style={{fontSize:11,color:T.inkFaint,letterSpacing:"0.1em"}}>EMPRESA:</span>
+          <select value={empresaSel} onChange={e=>setEmpresaSel(e.target.value)}
+            style={{padding:"7px 12px",border:`1px solid ${T.border}`,borderRadius:8,fontFamily:T.f,fontSize:13,color:T.ink,background:T.surface,minWidth:200}}>
+            <option value="todas">Todas as empresas</option>
+            {empresas.map(e=>(<option key={e.id} value={e.id}>{e.nome}</option>))}
+          </select>
+        </div>
+        <div style={{display:"flex",alignItems:"center",gap:8}}>
+          <span style={{fontSize:11,color:T.inkFaint,letterSpacing:"0.1em"}}>PERÍODO:</span>
+          <select value={periodo} onChange={e=>setPeriodo(parseInt(e.target.value))}
+            style={{padding:"7px 12px",border:`1px solid ${T.border}`,borderRadius:8,fontFamily:T.f,fontSize:13,color:T.ink,background:T.surface}}>
+            <option value="30">30 dias</option>
+            <option value="90">90 dias</option>
+            <option value="180">180 dias</option>
+            <option value="365">365 dias</option>
+          </select>
+        </div>
+        {/* Filtros adicionais (futuro) */}
+        <div style={{marginLeft:"auto",fontSize:11,color:T.inkFaint,fontStyle:"italic"}}>
+          Filtros por médico e diagnóstico em breve
+        </div>
+      </div>
+
+      {loading?(
+        <div style={{textAlign:"center",padding:60,color:T.inkFaint}}>Carregando...</div>
+      ):dados.pacientes.length===0?(
+        <Card style={{padding:40,textAlign:"center"}}>
+          <div style={{fontSize:32,marginBottom:12}}>💚</div>
+          <div style={{fontSize:14,color:T.ink,marginBottom:6}}>Nenhum paciente nesta seleção</div>
+          <div style={{fontSize:12,color:T.inkMid}}>Selecione outra empresa ou período.</div>
+        </Card>
+      ):(
+        <>
+          {/* CARDS DE MÉTRICAS */}
+          <div style={{display:"grid",gridTemplateColumns:"repeat(4,1fr)",gap:14,marginBottom:20}}>
+            {/* Adesão geral */}
+            <Card style={{padding:"18px 20px"}}>
+              <div style={{fontSize:11,color:T.inkFaint,letterSpacing:"0.1em",marginBottom:8}}>ADESÃO GERAL</div>
+              <div style={{display:"flex",alignItems:"baseline",gap:6,marginBottom:6}}>
+                <div style={{fontSize:32,fontWeight:600,color:corAdesao(adesaoGeral)}}>{adesaoGeral!=null?adesaoGeral:"—"}</div>
+                {adesaoGeral!=null&&<div style={{fontSize:14,color:T.inkMid}}>%</div>}
+              </div>
+              <div style={{fontSize:11,color:T.inkMid}}>
+                {pacientesComPlano.length} paciente{pacientesComPlano.length!==1?"s":""} com plano · {periodo}d
+              </div>
+              <div style={{height:4,background:T.border,borderRadius:2,marginTop:10,overflow:"hidden"}}>
+                <div style={{width:(adesaoGeral||0)+"%",height:"100%",background:corAdesao(adesaoGeral),borderRadius:2}}/>
+              </div>
+            </Card>
+
+            {/* Rastreamento */}
+            <Card style={{padding:"18px 20px"}}>
+              <div style={{fontSize:11,color:T.inkFaint,letterSpacing:"0.1em",marginBottom:8}}>RASTREAMENTO EM DIA</div>
+              <div style={{display:"flex",alignItems:"baseline",gap:6,marginBottom:6}}>
+                <div style={{fontSize:32,fontWeight:600,color:corAdesao(rastreamentoStats.pct)}}>{rastreamentoStats.pct!=null?rastreamentoStats.pct:"—"}</div>
+                {rastreamentoStats.pct!=null&&<div style={{fontSize:14,color:T.inkMid}}>%</div>}
+              </div>
+              <div style={{fontSize:11,color:T.inkMid}}>
+                {rastreamentoStats.emDia}/{rastreamentoStats.aplicaveis} itens aplicáveis
+              </div>
+              <div style={{height:4,background:T.border,borderRadius:2,marginTop:10,overflow:"hidden"}}>
+                <div style={{width:(rastreamentoStats.pct||0)+"%",height:"100%",background:corAdesao(rastreamentoStats.pct),borderRadius:2}}/>
+              </div>
+            </Card>
+
+            {/* Vacinação */}
+            <Card style={{padding:"18px 20px"}}>
+              <div style={{fontSize:11,color:T.inkFaint,letterSpacing:"0.1em",marginBottom:8}}>VACINAÇÃO EM DIA</div>
+              <div style={{display:"flex",alignItems:"baseline",gap:6,marginBottom:6}}>
+                <div style={{fontSize:32,fontWeight:600,color:corAdesao(vacinacaoStats.pct)}}>{vacinacaoStats.pct!=null?vacinacaoStats.pct:"—"}</div>
+                {vacinacaoStats.pct!=null&&<div style={{fontSize:14,color:T.inkMid}}>%</div>}
+              </div>
+              <div style={{fontSize:11,color:T.inkMid}}>
+                {vacinacaoStats.emDia}/{vacinacaoStats.aplicaveis} doses aplicáveis
+              </div>
+              <div style={{height:4,background:T.border,borderRadius:2,marginTop:10,overflow:"hidden"}}>
+                <div style={{width:(vacinacaoStats.pct||0)+"%",height:"100%",background:corAdesao(vacinacaoStats.pct),borderRadius:2}}/>
+              </div>
+            </Card>
+
+            {/* Episódios */}
+            <Card style={{padding:"18px 20px"}}>
+              <div style={{fontSize:11,color:T.inkFaint,letterSpacing:"0.1em",marginBottom:8}}>EPISÓDIOS ATIVOS</div>
+              <div style={{display:"flex",alignItems:"baseline",gap:6,marginBottom:6}}>
+                <div style={{fontSize:32,fontWeight:600,color:T.green}}>{episodiosAtivosCount}</div>
+              </div>
+              <div style={{fontSize:11,color:T.inkMid}}>
+                {pacientesComEpisodio} paciente{pacientesComEpisodio!==1?"s":""} em tratamento
+              </div>
+              <div style={{height:4,marginTop:10}}/>
+            </Card>
+          </div>
+
+          {/* TOP 10 PIORES */}
+          <Card style={{padding:"20px 22px"}}>
+            <div style={{display:"flex",alignItems:"center",gap:10,marginBottom:14}}>
+              <span style={{fontSize:18}}>🎯</span>
+              <div style={{flex:1}}>
+                <div style={{fontSize:14,fontWeight:600,color:T.ink}}>Pacientes que mais precisam de atenção</div>
+                <div style={{fontSize:11,color:T.inkMid}}>Top 10 em ordem crescente de adesão · últimos {periodo} dias</div>
+              </div>
+            </div>
+            {piores.length===0?(
+              <div style={{padding:30,textAlign:"center",fontSize:12,color:T.inkFaint}}>
+                Nenhum paciente com plano de cuidado ativo nesta seleção.
+              </div>
+            ):(
+              <div style={{display:"flex",flexDirection:"column",gap:6}}>
+                {piores.map((p,i)=>{
+                  const cor=corAdesao(p.adesao);
+                  const inicial=(p.nome||"?").trim()[0].toUpperCase();
+                  return(
+                    <div key={p.id}
+                      style={{display:"flex",alignItems:"center",gap:12,padding:"10px 12px",borderRadius:8,background:T.surface,border:`1px solid ${T.border}`}}>
+                      <div style={{width:28,height:28,borderRadius:"50%",background:cor+"20",color:cor,display:"flex",alignItems:"center",justifyContent:"center",fontSize:12,fontWeight:600,flexShrink:0}}>
+                        {inicial}
+                      </div>
+                      <div style={{flex:1}}>
+                        <div style={{fontSize:13,fontWeight:500,color:T.ink}}>{p.nome}</div>
+                        <div style={{fontSize:11,color:T.inkMid}}>
+                          {p.feitos} de {p.esperado} ações esperadas · plano com {dados.plano.filter(t=>t.paciente_id===p.id).length} tarefas
+                        </div>
+                      </div>
+                      <div style={{width:80,height:6,background:T.border,borderRadius:3,overflow:"hidden",flexShrink:0}}>
+                        <div style={{width:p.adesao+"%",height:"100%",background:cor,borderRadius:3}}/>
+                      </div>
+                      <div style={{fontSize:13,fontWeight:600,color:cor,minWidth:48,textAlign:"right"}}>{p.adesao}%</div>
+                    </div>
+                  );
+                })}
+              </div>
+            )}
+          </Card>
+        </>
+      )}
+    </div>
   );
 }
 
