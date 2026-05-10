@@ -1757,47 +1757,78 @@ function FormEtapa({episodioId,duracaoMeses,apiKey,onSalvo,onCancelar}){
 function TelaEngajamento(){
   const[loading,setLoading]=useState(true);
   const[empresas,setEmpresas]=useState([]);
-  const[empresaSel,setEmpresaSel]=useState("todas"); // "todas" | uuid
-  const[periodo,setPeriodo]=useState(30); // dias
+  const[medicos,setMedicos]=useState([]);
+  const[cidsDisponiveis,setCidsDisponiveis]=useState([]); // {cid, nome, qtd}
+  const[empresaSel,setEmpresaSel]=useState("todas");
+  const[medicoSel,setMedicoSel]=useState("todos");
+  const[cidsSel,setCidsSel]=useState([]); // multi
+  const[periodo,setPeriodo]=useState(30);
+  const[mostrarFiltrosCid,setMostrarFiltrosCid]=useState(false);
+  const[pacienteDrill,setPacienteDrill]=useState(null); // {id, nome} ou null
   const[dados,setDados]=useState({
-    pacientes:[],
-    plano:[],
-    registros:[],
-    rastreamentoConfig:[],
-    rastreamentoRegistros:[],
-    vacinacaoConfig:[],
-    vacinacaoRegistros:[],
-    episodiosAtivos:[],
+    pacientes:[],plano:[],registros:[],
+    rastreamentoConfig:[],rastreamentoRegistros:[],
+    vacinacaoConfig:[],vacinacaoRegistros:[],
+    episodiosAtivos:[],diagnosticosPorPaciente:{},
   });
 
-  // Carregar empresas (1 vez)
+  // Carregar empresas, médicos e CIDs (1 vez)
   useEffect(()=>{
-    supabase.from("empresas").select("id,nome").order("nome").then(({data})=>{
-      setEmpresas(data||[]);
+    Promise.all([
+      supabase.from("empresas").select("id,nome").order("nome"),
+      supabase.from("medicos").select("id,nome").eq("ativo",true).order("nome"),
+      supabase.from("diagnosticos").select("cid,nome"),
+    ]).then(([{data:emps},{data:meds},{data:diags}])=>{
+      setEmpresas(emps||[]);
+      setMedicos(meds||[]);
+      // Agrupar CIDs únicos com contagem
+      const cidsMap={};
+      (diags||[]).forEach(d=>{
+        if(!cidsMap[d.cid])cidsMap[d.cid]={cid:d.cid,nome:d.nome,qtd:0};
+        cidsMap[d.cid].qtd++;
+      });
+      const cidsList=Object.values(cidsMap).sort((a,b)=>b.qtd-a.qtd);
+      setCidsDisponiveis(cidsList);
     });
   },[]);
 
-  // Carregar dados conforme filtros
   const recarregar=async()=>{
     setLoading(true);
     const inicio=new Date();inicio.setDate(inicio.getDate()-periodo);
     const inicioStr=inicio.toISOString().slice(0,10);
 
-    // Filtro de pacientes por empresa
+    // 1. Buscar pacientes com filtro de empresa + médico
     let qPacientes=supabase.from("pacientes").select("id,nome,email,empresa_id,medico_id,ativo,data_nascimento").eq("ativo",true);
     if(empresaSel!=="todas")qPacientes=qPacientes.eq("empresa_id",empresaSel);
-    const{data:pacs}=await qPacientes;
-    const pacIds=(pacs||[]).map(p=>p.id);
+    if(medicoSel!=="todos")qPacientes=qPacientes.eq("medico_id",medicoSel);
+    let{data:pacs}=await qPacientes;
+    pacs=pacs||[];
 
+    // 2. Se filtro CID ativo, manter só pacientes com aquele(s) CID(s)
+    let diagsPorPac={};
+    if(pacs.length>0){
+      const{data:allDiags}=await supabase.from("diagnosticos").select("paciente_id,cid,nome").in("paciente_id",pacs.map(p=>p.id));
+      (allDiags||[]).forEach(d=>{
+        if(!diagsPorPac[d.paciente_id])diagsPorPac[d.paciente_id]=[];
+        diagsPorPac[d.paciente_id].push({cid:d.cid,nome:d.nome});
+      });
+      if(cidsSel.length>0){
+        pacs=pacs.filter(p=>{
+          const ds=diagsPorPac[p.id]||[];
+          return ds.some(d=>cidsSel.includes(d.cid));
+        });
+      }
+    }
+
+    const pacIds=pacs.map(p=>p.id);
     if(pacIds.length===0){
-      setDados({pacientes:[],plano:[],registros:[],rastreamentoConfig:[],rastreamentoRegistros:[],vacinacaoConfig:[],vacinacaoRegistros:[],episodiosAtivos:[]});
+      setDados({pacientes:[],plano:[],registros:[],rastreamentoConfig:[],rastreamentoRegistros:[],vacinacaoConfig:[],vacinacaoRegistros:[],episodiosAtivos:[],diagnosticosPorPaciente:diagsPorPac});
       setLoading(false);
       return;
     }
 
-    // Empresas IDs aplicáveis (pra buscar configs corretas)
     const empresasIds = empresaSel==="todas"
-      ? [...new Set((pacs||[]).map(p=>p.empresa_id).filter(Boolean))]
+      ? [...new Set(pacs.map(p=>p.empresa_id).filter(Boolean))]
       : [empresaSel];
 
     const[
@@ -1823,7 +1854,7 @@ function TelaEngajamento(){
     ]);
 
     setDados({
-      pacientes:pacs||[],
+      pacientes:pacs,
       plano:plano||[],
       registros:registros||[],
       rastreamentoConfig:rastConfig||[],
@@ -1831,27 +1862,16 @@ function TelaEngajamento(){
       vacinacaoConfig:vacConfig||[],
       vacinacaoRegistros:vacRegs||[],
       episodiosAtivos:epAtivos||[],
-    });
-    console.log("[ENGAJ-DEBUG]",{
-      pacientes:pacs?.length,
-      empresaSel,
-      vacinacaoConfig:vacConfig?.length,
-      vacinacaoRegistros:vacRegs?.length,
-      rastreamentoConfig:rastConfig?.length,
-      rastreamentoRegistros:rastRegs?.length,
-      pacExemplo:pacs?.[0],
-      vacConfigExemplo:vacConfig?.[0],
-      vacRegExemplo:vacRegs?.[0],
+      diagnosticosPorPaciente:diagsPorPac,
     });
     setLoading(false);
   };
 
-  useEffect(()=>{recarregar();},[empresaSel,periodo]);
+  useEffect(()=>{recarregar();},[empresaSel,medicoSel,cidsSel,periodo]);
 
   // ─── CÁLCULOS ────────────────────────────────────────────────────
   const calcIdade=(dn)=>dn?Math.floor((new Date()-new Date(dn))/(365.25*24*3600*1000)):null;
 
-  // Adesão por paciente (mesma fórmula do médico)
   const adesaoPorPaciente=dados.pacientes.map(p=>{
     const planoP=dados.plano.filter(t=>t.paciente_id===p.id);
     const regsP=dados.registros.filter(r=>r.paciente_id===p.id&&r.status==="concluido");
@@ -1867,16 +1887,13 @@ function TelaEngajamento(){
     return{...p,adesao,esperado:Math.round(esp),feitos:regsP.length};
   });
 
-  // Adesão geral da carteira
   const pacientesComPlano=adesaoPorPaciente.filter(p=>p.adesao!==null);
   const adesaoGeral = pacientesComPlano.length>0
     ? Math.round(pacientesComPlano.reduce((acc,p)=>acc+p.adesao,0)/pacientesComPlano.length)
     : null;
 
-  // Rastreamento em dia
   const rastreamentoStats=(()=>{
-    let aplicaveis=0;
-    let emDia=0;
+    let aplicaveis=0,emDia=0;
     const hoje=new Date();
     dados.pacientes.forEach(p=>{
       const idade=calcIdade(p.data_nascimento);
@@ -1887,51 +1904,45 @@ function TelaEngajamento(){
         if(rc.idade_fim&&idade>rc.idade_fim)return;
         aplicaveis++;
         const reg=dados.rastreamentoRegistros.find(r=>r.paciente_id===p.id&&r.config_id===rc.id);
-        if(!reg)return;
-        if(reg.status!=="realizado")return;
+        if(!reg||reg.status!=="realizado")return;
         if(!reg.proximo_previsto){emDia++;return;}
-        if(new Date(reg.proximo_previsto+"T12:00:00")>hoje){emDia++;return;}
+        if(new Date(reg.proximo_previsto+"T12:00:00")>hoje)emDia++;
       });
     });
     const pct=aplicaveis>0?Math.round((emDia/aplicaveis)*100):null;
     return{pct,aplicaveis,emDia};
   })();
 
-  // Vacinação em dia
   const vacinacaoStats=(()=>{
-    let aplicaveis=0;
-    let emDia=0;
+    let aplicaveis=0,emDia=0;
     const hoje=new Date();
     dados.pacientes.forEach(p=>{
       const idade=calcIdade(p.data_nascimento);
       if(idade==null)return;
-      // Para cada config, descobrir se aplicável a este paciente
       dados.vacinacaoConfig.forEach(vc=>{
-        // Se filtro era "todas", checa empresa; senão, todas as configs já estão filtradas
         if(empresaSel==="todas" && vc.empresa_id!==p.empresa_id)return;
         if(idade<vc.idade_inicio)return;
         if(vc.idade_fim&&idade>vc.idade_fim)return;
         aplicaveis++;
         const reg=dados.vacinacaoRegistros.find(r=>r.paciente_id===p.id&&r.config_id===vc.id);
-        if(!reg)return; // sem registro = não em dia
-        if(reg.status!=="aplicada")return; // atrasada/pendente = não em dia
-        // proximo_previsto null = esquema completo permanente, conta como em dia
+        if(!reg||reg.status!=="aplicada")return;
         if(!reg.proximo_previsto){emDia++;return;}
-        if(new Date(reg.proximo_previsto+"T12:00:00")>hoje){emDia++;return;}
+        if(new Date(reg.proximo_previsto+"T12:00:00")>hoje)emDia++;
       });
     });
     const pct=aplicaveis>0?Math.round((emDia/aplicaveis)*100):null;
     return{pct,aplicaveis,emDia};
   })();
 
-  // Episódios ativos
   const episodiosAtivosCount=dados.episodiosAtivos.length;
   const pacientesComEpisodio=new Set(dados.episodiosAtivos.map(e=>e.paciente_id)).size;
 
-  // Top 10 piores em adesão (descartando sem plano)
   const piores=pacientesComPlano.sort((a,b)=>a.adesao-b.adesao).slice(0,10);
-
   const corAdesao=(pct)=>pct==null?T.inkFaint:pct<40?T.red:pct<60?T.orange:T.green;
+
+  const toggleCid=(cid)=>{
+    setCidsSel(prev=>prev.includes(cid)?prev.filter(c=>c!==cid):[...prev,cid]);
+  };
 
   // ─── RENDER ──────────────────────────────────────────────────────
   return(
@@ -1943,14 +1954,22 @@ function TelaEngajamento(){
         </div>
       </div>
 
-      {/* FILTROS */}
-      <div style={{display:"flex",gap:14,alignItems:"center",marginBottom:20,flexWrap:"wrap"}}>
+      {/* FILTROS LINHA 1 */}
+      <div style={{display:"flex",gap:14,alignItems:"center",marginBottom:12,flexWrap:"wrap"}}>
         <div style={{display:"flex",alignItems:"center",gap:8}}>
           <span style={{fontSize:11,color:T.inkFaint,letterSpacing:"0.1em"}}>EMPRESA:</span>
           <select value={empresaSel} onChange={e=>setEmpresaSel(e.target.value)}
-            style={{padding:"7px 12px",border:`1px solid ${T.border}`,borderRadius:8,fontFamily:T.f,fontSize:13,color:T.ink,background:T.surface,minWidth:200}}>
-            <option value="todas">Todas as empresas</option>
+            style={{padding:"7px 12px",border:`1px solid ${T.border}`,borderRadius:8,fontFamily:T.f,fontSize:13,color:T.ink,background:T.surface,minWidth:160}}>
+            <option value="todas">Todas</option>
             {empresas.map(e=>(<option key={e.id} value={e.id}>{e.nome}</option>))}
+          </select>
+        </div>
+        <div style={{display:"flex",alignItems:"center",gap:8}}>
+          <span style={{fontSize:11,color:T.inkFaint,letterSpacing:"0.1em"}}>MÉDICO:</span>
+          <select value={medicoSel} onChange={e=>setMedicoSel(e.target.value)}
+            style={{padding:"7px 12px",border:`1px solid ${T.border}`,borderRadius:8,fontFamily:T.f,fontSize:13,color:T.ink,background:T.surface,minWidth:160}}>
+            <option value="todos">Todos</option>
+            {medicos.map(m=>(<option key={m.id} value={m.id}>{m.nome}</option>))}
           </select>
         </div>
         <div style={{display:"flex",alignItems:"center",gap:8}}>
@@ -1963,11 +1982,47 @@ function TelaEngajamento(){
             <option value="365">365 dias</option>
           </select>
         </div>
-        {/* Filtros adicionais (futuro) */}
-        <div style={{marginLeft:"auto",fontSize:11,color:T.inkFaint,fontStyle:"italic"}}>
-          Filtros por médico e diagnóstico em breve
-        </div>
+        <button onClick={()=>setMostrarFiltrosCid(v=>!v)}
+          style={{marginLeft:"auto",padding:"7px 14px",border:`1px solid ${cidsSel.length>0?T.green:T.border}`,borderRadius:8,
+            background:cidsSel.length>0?T.green+"15":T.surface,color:cidsSel.length>0?T.green:T.inkMid,
+            cursor:"pointer",fontFamily:T.f,fontSize:12,display:"flex",alignItems:"center",gap:6}}>
+          🩺 Filtrar por CID {cidsSel.length>0?`(${cidsSel.length})`:""}
+        </button>
       </div>
+
+      {/* FILTROS CID (expansível) */}
+      {mostrarFiltrosCid&&(
+        <Card style={{padding:"14px 18px",marginBottom:12}}>
+          <div style={{display:"flex",justifyContent:"space-between",alignItems:"center",marginBottom:10}}>
+            <div style={{fontSize:12,color:T.inkMid}}>
+              Selecione um ou mais CIDs. Pacientes serão filtrados por presença em pelo menos um.
+            </div>
+            {cidsSel.length>0&&(
+              <button onClick={()=>setCidsSel([])}
+                style={{background:"none",border:"none",color:T.red,fontSize:11,cursor:"pointer",fontFamily:T.f}}>
+                Limpar seleção
+              </button>
+            )}
+          </div>
+          <div style={{display:"flex",flexWrap:"wrap",gap:6,maxHeight:160,overflowY:"auto"}}>
+            {cidsDisponiveis.length===0?(
+              <div style={{fontSize:11,color:T.inkFaint}}>Carregando CIDs...</div>
+            ):cidsDisponiveis.map(c=>{
+              const sel=cidsSel.includes(c.cid);
+              return(
+                <button key={c.cid} onClick={()=>toggleCid(c.cid)}
+                  title={c.nome}
+                  style={{padding:"5px 10px",border:`1px solid ${sel?T.green:T.border}`,borderRadius:14,
+                    background:sel?T.green+"15":T.surface,color:sel?T.green:T.ink,
+                    cursor:"pointer",fontFamily:T.f,fontSize:11,display:"flex",alignItems:"center",gap:5}}>
+                  <span style={{fontWeight:500}}>{c.cid}</span>
+                  <span style={{color:T.inkFaint,fontSize:10}}>({c.qtd})</span>
+                </button>
+              );
+            })}
+          </div>
+        </Card>
+      )}
 
       {loading?(
         <div style={{textAlign:"center",padding:60,color:T.inkFaint}}>Carregando...</div>
@@ -1975,13 +2030,16 @@ function TelaEngajamento(){
         <Card style={{padding:40,textAlign:"center"}}>
           <div style={{fontSize:32,marginBottom:12}}>💚</div>
           <div style={{fontSize:14,color:T.ink,marginBottom:6}}>Nenhum paciente nesta seleção</div>
-          <div style={{fontSize:12,color:T.inkMid}}>Selecione outra empresa ou período.</div>
+          <div style={{fontSize:12,color:T.inkMid}}>Ajuste os filtros para ver resultados.</div>
         </Card>
       ):(
         <>
+          <div style={{fontSize:11,color:T.inkFaint,marginBottom:14,letterSpacing:"0.04em"}}>
+            ▸ {dados.pacientes.length} paciente{dados.pacientes.length!==1?"s":""} na seleção
+          </div>
+
           {/* CARDS DE MÉTRICAS */}
           <div style={{display:"grid",gridTemplateColumns:"repeat(4,1fr)",gap:14,marginBottom:20}}>
-            {/* Adesão geral */}
             <Card style={{padding:"18px 20px"}}>
               <div style={{fontSize:11,color:T.inkFaint,letterSpacing:"0.1em",marginBottom:8}}>ADESÃO GERAL</div>
               <div style={{display:"flex",alignItems:"baseline",gap:6,marginBottom:6}}>
@@ -1996,7 +2054,6 @@ function TelaEngajamento(){
               </div>
             </Card>
 
-            {/* Rastreamento */}
             <Card style={{padding:"18px 20px"}}>
               <div style={{fontSize:11,color:T.inkFaint,letterSpacing:"0.1em",marginBottom:8}}>RASTREAMENTO EM DIA</div>
               <div style={{display:"flex",alignItems:"baseline",gap:6,marginBottom:6}}>
@@ -2011,7 +2068,6 @@ function TelaEngajamento(){
               </div>
             </Card>
 
-            {/* Vacinação */}
             <Card style={{padding:"18px 20px"}}>
               <div style={{fontSize:11,color:T.inkFaint,letterSpacing:"0.1em",marginBottom:8}}>VACINAÇÃO EM DIA</div>
               <div style={{display:"flex",alignItems:"baseline",gap:6,marginBottom:6}}>
@@ -2026,7 +2082,6 @@ function TelaEngajamento(){
               </div>
             </Card>
 
-            {/* Episódios */}
             <Card style={{padding:"18px 20px"}}>
               <div style={{fontSize:11,color:T.inkFaint,letterSpacing:"0.1em",marginBottom:8}}>EPISÓDIOS ATIVOS</div>
               <div style={{display:"flex",alignItems:"baseline",gap:6,marginBottom:6}}>
@@ -2045,7 +2100,7 @@ function TelaEngajamento(){
               <span style={{fontSize:18}}>🎯</span>
               <div style={{flex:1}}>
                 <div style={{fontSize:14,fontWeight:600,color:T.ink}}>Pacientes que mais precisam de atenção</div>
-                <div style={{fontSize:11,color:T.inkMid}}>Top 10 em ordem crescente de adesão · últimos {periodo} dias</div>
+                <div style={{fontSize:11,color:T.inkMid}}>Top 10 em ordem crescente de adesão · últimos {periodo} dias · clique para detalhes</div>
               </div>
             </div>
             {piores.length===0?(
@@ -2054,19 +2109,24 @@ function TelaEngajamento(){
               </div>
             ):(
               <div style={{display:"flex",flexDirection:"column",gap:6}}>
-                {piores.map((p,i)=>{
+                {piores.map(p=>{
                   const cor=corAdesao(p.adesao);
                   const inicial=(p.nome||"?").trim()[0].toUpperCase();
+                  const diags=dados.diagnosticosPorPaciente[p.id]||[];
                   return(
-                    <div key={p.id}
-                      style={{display:"flex",alignItems:"center",gap:12,padding:"10px 12px",borderRadius:8,background:T.surface,border:`1px solid ${T.border}`}}>
+                    <div key={p.id} onClick={()=>setPacienteDrill(p)}
+                      style={{display:"flex",alignItems:"center",gap:12,padding:"10px 12px",borderRadius:8,
+                        background:T.surface,border:`1px solid ${T.border}`,cursor:"pointer",transition:"background 0.15s"}}
+                      onMouseEnter={e=>e.currentTarget.style.background=T.bg}
+                      onMouseLeave={e=>e.currentTarget.style.background=T.surface}>
                       <div style={{width:28,height:28,borderRadius:"50%",background:cor+"20",color:cor,display:"flex",alignItems:"center",justifyContent:"center",fontSize:12,fontWeight:600,flexShrink:0}}>
                         {inicial}
                       </div>
-                      <div style={{flex:1}}>
+                      <div style={{flex:1,minWidth:0}}>
                         <div style={{fontSize:13,fontWeight:500,color:T.ink}}>{p.nome}</div>
-                        <div style={{fontSize:11,color:T.inkMid}}>
-                          {p.feitos} de {p.esperado} ações esperadas · plano com {dados.plano.filter(t=>t.paciente_id===p.id).length} tarefas
+                        <div style={{fontSize:11,color:T.inkMid,whiteSpace:"nowrap",overflow:"hidden",textOverflow:"ellipsis"}}>
+                          {p.feitos}/{p.esperado} ações · {dados.plano.filter(t=>t.paciente_id===p.id).length} tarefas
+                          {diags.length>0&&" · "+diags.slice(0,3).map(d=>d.cid).join(", ")}{diags.length>3?"...":""}
                         </div>
                       </div>
                       <div style={{width:80,height:6,background:T.border,borderRadius:3,overflow:"hidden",flexShrink:0}}>
@@ -2081,9 +2141,66 @@ function TelaEngajamento(){
           </Card>
         </>
       )}
+
+      {/* MODAL DRILL-DOWN */}
+      {pacienteDrill&&(
+        <div style={{position:"fixed",inset:0,background:"rgba(0,0,0,0.5)",display:"flex",alignItems:"center",justifyContent:"center",zIndex:100,padding:20}}
+          onClick={()=>setPacienteDrill(null)}>
+          <Card style={{padding:"24px 28px",maxWidth:520,width:"100%"}} onClick={e=>e.stopPropagation()}>
+            <div style={{display:"flex",justifyContent:"space-between",alignItems:"start",marginBottom:14}}>
+              <div>
+                <div style={{fontSize:18,fontWeight:600,color:T.ink}}>{pacienteDrill.nome}</div>
+                <div style={{fontSize:12,color:T.inkMid,marginTop:2}}>{pacienteDrill.email}</div>
+              </div>
+              <button onClick={()=>setPacienteDrill(null)}
+                style={{background:"none",border:"none",fontSize:20,color:T.inkFaint,cursor:"pointer"}}>×</button>
+            </div>
+
+            <div style={{display:"grid",gridTemplateColumns:"1fr 1fr",gap:12,marginBottom:14}}>
+              <div style={{padding:"10px 12px",background:T.bg,borderRadius:8}}>
+                <div style={{fontSize:10,color:T.inkFaint,letterSpacing:"0.1em",marginBottom:4}}>ADESÃO</div>
+                <div style={{fontSize:20,fontWeight:600,color:corAdesao(pacienteDrill.adesao)}}>{pacienteDrill.adesao}%</div>
+                <div style={{fontSize:11,color:T.inkMid}}>{pacienteDrill.feitos}/{pacienteDrill.esperado} ações</div>
+              </div>
+              <div style={{padding:"10px 12px",background:T.bg,borderRadius:8}}>
+                <div style={{fontSize:10,color:T.inkFaint,letterSpacing:"0.1em",marginBottom:4}}>IDADE</div>
+                <div style={{fontSize:20,fontWeight:600,color:T.ink}}>{calcIdade(pacienteDrill.data_nascimento)||"—"}</div>
+                <div style={{fontSize:11,color:T.inkMid}}>{pacienteDrill.genero||"não informado"}</div>
+              </div>
+            </div>
+
+            <div style={{marginBottom:14}}>
+              <div style={{fontSize:11,color:T.inkFaint,letterSpacing:"0.1em",marginBottom:6}}>DIAGNÓSTICOS</div>
+              {(dados.diagnosticosPorPaciente[pacienteDrill.id]||[]).length===0?(
+                <div style={{fontSize:12,color:T.inkFaint,fontStyle:"italic"}}>Nenhum diagnóstico registrado</div>
+              ):(
+                <div style={{display:"flex",flexWrap:"wrap",gap:5}}>
+                  {(dados.diagnosticosPorPaciente[pacienteDrill.id]||[]).map((d,i)=>(
+                    <span key={i} title={d.nome}
+                      style={{padding:"3px 8px",background:T.green+"15",color:T.green,borderRadius:10,fontSize:10,fontWeight:500}}>
+                      {d.cid}
+                    </span>
+                  ))}
+                </div>
+              )}
+            </div>
+
+            <div style={{padding:"10px 12px",background:T.bg,borderRadius:8,marginBottom:14}}>
+              <div style={{fontSize:11,color:T.inkMid,marginBottom:4}}>
+                Esta tela é uma visão rápida. Para análise clínica completa, abra a ficha do paciente.
+              </div>
+            </div>
+
+            <div style={{display:"flex",gap:10,justifyContent:"flex-end"}}>
+              <Btn variant="outline" onClick={()=>setPacienteDrill(null)}>Fechar</Btn>
+            </div>
+          </Card>
+        </div>
+      )}
     </div>
   );
 }
+
 
 // ─── Tela Pacientes Admin ──────────────────────────────────────────
 function TelaPacientesAdmin({apiKey,medicos=[]}){
