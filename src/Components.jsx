@@ -1772,25 +1772,25 @@ function TelaEngajamento(){
     episodiosAtivos:[],diagnosticosPorPaciente:{},
   });
 
-  // Carregar empresas, médicos e CIDs (1 vez)
-  useEffect(()=>{
-    Promise.all([
+  // Carregar empresas, médicos e CIDs (auto-recarrega junto com os dados)
+  const carregarListasFixas=async()=>{
+    const[{data:emps},{data:meds},{data:diags}]=await Promise.all([
       supabase.from("empresas").select("id,nome").order("nome"),
       supabase.from("medicos").select("id,nome").eq("ativo",true).order("nome"),
       supabase.from("diagnosticos").select("cid,nome"),
-    ]).then(([{data:emps},{data:meds},{data:diags}])=>{
-      setEmpresas(emps||[]);
-      setMedicos(meds||[]);
-      // Agrupar CIDs únicos com contagem
-      const cidsMap={};
-      (diags||[]).forEach(d=>{
-        if(!cidsMap[d.cid])cidsMap[d.cid]={cid:d.cid,nome:d.nome,qtd:0};
-        cidsMap[d.cid].qtd++;
-      });
-      const cidsList=Object.values(cidsMap).sort((a,b)=>b.qtd-a.qtd);
-      setCidsDisponiveis(cidsList);
+    ]);
+    setEmpresas(emps||[]);
+    setMedicos(meds||[]);
+    const cidsMap={};
+    (diags||[]).forEach(d=>{
+      if(!cidsMap[d.cid])cidsMap[d.cid]={cid:d.cid,nome:d.nome,qtd:0};
+      cidsMap[d.cid].qtd++;
     });
-  },[]);
+    const cidsList=Object.values(cidsMap).sort((a,b)=>b.qtd-a.qtd);
+    setCidsDisponiveis(cidsList);
+  };
+
+  useEffect(()=>{carregarListasFixas();},[]);
 
   const recarregar=async()=>{
     setLoading(true);
@@ -1982,7 +1982,7 @@ function TelaEngajamento(){
             <option value="365">365 dias</option>
           </select>
         </div>
-        <button onClick={()=>setMostrarFiltrosCid(v=>!v)}
+        <button onClick={()=>{setMostrarFiltrosCid(v=>!v);if(!mostrarFiltrosCid)carregarListasFixas();}}
           style={{marginLeft:"auto",padding:"7px 14px",border:`1px solid ${cidsSel.length>0?T.green:T.border}`,borderRadius:8,
             background:cidsSel.length>0?T.green+"15":T.surface,color:cidsSel.length>0?T.green:T.inkMid,
             cursor:"pointer",fontFamily:T.f,fontSize:12,display:"flex",alignItems:"center",gap:6}}>
