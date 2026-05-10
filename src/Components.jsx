@@ -1799,6 +1799,17 @@ function TelaEngajamento(){
       vacinacaoRegistros:vacRegs||[],
       episodiosAtivos:epAtivos||[],
     });
+    console.log("[ENGAJ-DEBUG]",{
+      pacientes:pacs?.length,
+      empresaSel,
+      vacinacaoConfig:vacConfig?.length,
+      vacinacaoRegistros:vacRegs?.length,
+      rastreamentoConfig:rastConfig?.length,
+      rastreamentoRegistros:rastRegs?.length,
+      pacExemplo:pacs?.[0],
+      vacConfigExemplo:vacConfig?.[0],
+      vacRegExemplo:vacRegs?.[0],
+    });
     setLoading(false);
   };
 
@@ -1830,23 +1841,23 @@ function TelaEngajamento(){
     : null;
 
   // Rastreamento em dia
-  // Para cada paciente aplicável a cada config, está em dia?
   const rastreamentoStats=(()=>{
     let aplicaveis=0;
     let emDia=0;
+    const hoje=new Date();
     dados.pacientes.forEach(p=>{
       const idade=calcIdade(p.data_nascimento);
       if(idade==null)return;
       dados.rastreamentoConfig.forEach(rc=>{
-        if(rc.empresa_id!==p.empresa_id)return;
+        if(empresaSel==="todas" && rc.empresa_id!==p.empresa_id)return;
         if(idade<rc.idade_inicio)return;
         if(rc.idade_fim&&idade>rc.idade_fim)return;
         aplicaveis++;
-        // Está em dia? Tem registro com status='realizado' e proximo_previsto > hoje
         const reg=dados.rastreamentoRegistros.find(r=>r.paciente_id===p.id&&r.config_id===rc.id);
-        if(reg&&reg.status==="realizado"&&(!reg.proximo_previsto||new Date(reg.proximo_previsto)>new Date())){
-          emDia++;
-        }
+        if(!reg)return;
+        if(reg.status!=="realizado")return;
+        if(!reg.proximo_previsto){emDia++;return;}
+        if(new Date(reg.proximo_previsto+"T12:00:00")>hoje){emDia++;return;}
       });
     });
     const pct=aplicaveis>0?Math.round((emDia/aplicaveis)*100):null;
@@ -1857,18 +1868,23 @@ function TelaEngajamento(){
   const vacinacaoStats=(()=>{
     let aplicaveis=0;
     let emDia=0;
+    const hoje=new Date();
     dados.pacientes.forEach(p=>{
       const idade=calcIdade(p.data_nascimento);
       if(idade==null)return;
+      // Para cada config, descobrir se aplicável a este paciente
       dados.vacinacaoConfig.forEach(vc=>{
-        if(vc.empresa_id!==p.empresa_id)return;
+        // Se filtro era "todas", checa empresa; senão, todas as configs já estão filtradas
+        if(empresaSel==="todas" && vc.empresa_id!==p.empresa_id)return;
         if(idade<vc.idade_inicio)return;
         if(vc.idade_fim&&idade>vc.idade_fim)return;
         aplicaveis++;
         const reg=dados.vacinacaoRegistros.find(r=>r.paciente_id===p.id&&r.config_id===vc.id);
-        if(reg&&reg.status==="aplicada"&&(!reg.proximo_previsto||new Date(reg.proximo_previsto)>new Date())){
-          emDia++;
-        }
+        if(!reg)return; // sem registro = não em dia
+        if(reg.status!=="aplicada")return; // atrasada/pendente = não em dia
+        // proximo_previsto null = esquema completo permanente, conta como em dia
+        if(!reg.proximo_previsto){emDia++;return;}
+        if(new Date(reg.proximo_previsto+"T12:00:00")>hoje){emDia++;return;}
       });
     });
     const pct=aplicaveis>0?Math.round((emDia/aplicaveis)*100):null;
