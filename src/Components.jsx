@@ -998,39 +998,78 @@ function FormEpisodio({apiKey,onSalvo,onCancelar}){
   const TIPO_COR={consulta:T.green,exame:T.purple,medicamento:T.blue,estilo_vida:T.orange,questionario:T.blue,desfecho_clinico:T.green,desfecho_pro:T.purple,outro:T.inkMid};
   const TIPO_ICON={consulta:"🩺",exame:"🔬",medicamento:"💊",estilo_vida:"🌿",questionario:"📝",desfecho_clinico:"🎯",desfecho_pro:"📊",outro:"📋"};
 
-  const buscarSugestoes=async(cidTxt,nomeTxt)=>{
+  const buscarSugestoes=async(cidTxt,nomeTxt,tentativa=1)=>{
     if((!cidTxt&&nomeTxt.length<5)||!apiKey.startsWith("sk-"))return;
     setBuscando(true);
     setSugestao(null);
+    setErro(""); // limpa erro anterior
     try{
+      const promptBase = "Voce e especialista em medicina baseada em evidencias e ICHOM. Para a condicao: CID "+cidTxt+" / "+nomeTxt+" com duracao "+duracao+" meses, crie um protocolo clinico. ";
+      const promptFormato = "RETORNE APENAS JSON VALIDO. NAO use markdown, NAO use \\\\\\\\, NAO use aspas duplas dentro de strings (use simples ou parafraseie), NAO use quebras de linha dentro de strings, NAO use trailing commas. ";
+      const promptSchema = "Formato exato: {\"ichom_set\":\"nome\",\"ichom_url\":\"url ou string vazia\",\"etapas\":[{\"titulo\":\"texto\",\"tipo\":\"consulta\",\"dia\":0,\"responsavel\":\"medico\",\"descricao\":\"texto curto sem aspas duplas\",\"unidade\":\"\",\"meta\":\"\",\"intermediario\":true}]}. ";
+      const promptRegras = "Tipos validos: consulta, exame, medicamento, estilo_vida, questionario, desfecho_clinico, desfecho_pro. Responsaveis: medico, paciente, ana, equipe. dia = inteiro (0=inicio 30=1mes 90=3meses 180=6meses 365=12meses). Inclua 8 a 15 etapas ordenadas por dia. Para desfechos preencha unidade e meta.";
       const res=await fetch("/.netlify/functions/claude",{
         method:"POST",
         headers:{"Content-Type":"application/json","x-api-key":apiKey,"anthropic-version":"2023-06-01"},
         body:JSON.stringify({
           model:"claude-sonnet-4-20250514",
-          max_tokens:1200,
-          messages:[{role:"user",content:"Voce e especialista em medicina baseada em evidencias e ICHOM. Para a condicao: CID "+cidTxt+" / "+nomeTxt+" com duracao "+duracao+" meses, crie um protocolo clinico. Retorne SOMENTE JSON valido sem comentarios nem trailing commas. Formato exato: {\"ichom_set\":\"nome\",\"ichom_url\":\"url ou empty string\",\"etapas\":[{\"titulo\":\"texto\",\"tipo\":\"consulta\",\"dia\":0,\"responsavel\":\"medico\",\"descricao\":\"texto curto\",\"unidade\":\"\",\"meta\":\"\",\"intermediario\":true}]}. Tipos validos: consulta, exame, medicamento, estilo_vida, questionario, desfecho_clinico, desfecho_pro. Responsaveis: medico, paciente, ana, equipe. dia = inteiro (0=inicio 30=1mes 90=3meses 180=6meses 365=12meses). Inclua 8 a 15 etapas ordenadas por dia. Para desfechos preencha unidade e meta."}]
+          max_tokens:1500,
+          messages:[{role:"user",content: promptBase + promptFormato + promptSchema + promptRegras}]
         })
       });
       const data=await res.json();
       const raw=(data.content?.[0]?.text||"{}").trim();
       const match=raw.match(/\{[\s\S]*\}/);
-      if(match){
+      if(!match){
+        console.warn("[IA-EPISODIO] Não encontrou objeto JSON na resposta:",raw.slice(0,500));
+        setErro("A IA respondeu sem JSON válido. Tente reformular o nome do diagnóstico.");
+        return;
+      }
+      let parsed=null;
+      // Tentativa 1: sanitização leve
+      try{
+        const sanitized=match[0]
+          .replace(/,\s*([}\]])/g,"$1")
+          .replace(/\/\/[^\n"]*/g,"")
+          .replace(/[\x00-\x1F\x7F]/g," ")
+          .replace(/\n\s*/g," ");
+        parsed=JSON.parse(sanitized);
+      }catch(e1){
+        console.warn("[IA-EPISODIO] Sanitização leve falhou:",e1.message);
+        // Tentativa 2: reparo agressivo
         try{
-          // Sanitizar: remover trailing commas, comentários e caracteres de controle em strings
-          const sanitized=match[0]
+          let agressivo=match[0]
             .replace(/,\s*([}\]])/g,"$1")
             .replace(/\/\/[^\n"]*/g,"")
-            .replace(/[\x00-\x1F\x7F]/g," ") // caracteres de controle
-            .replace(/\n\s*/g," "); // quebras de linha dentro de strings
-          const parsed=JSON.parse(sanitized);
-          setSugestao(parsed);
-          setEtapas((parsed.etapas||[]).map((e,i)=>({...e,id:"temp_"+i,incluir:true})));
-        }catch(e){
-          console.warn("JSON falhou:",e.message);
+            .replace(/[\x00-\x1F\x7F]/g," ")
+            .replace(/\n/g," ")
+            .replace(/\r/g," ")
+            // Trocar aspas curvas por retas
+            .replace(/[\u201C\u201D]/g,'"')
+            .replace(/[\u2018\u2019]/g,"'")
+            // Escapar aspas duplas internas comuns ('para descartar "ela disse"' → 'para descartar ela disse')
+            .replace(/:\s*"([^"]*?)"([^",}\]]*?)"([^"]*?)"/g,':"$1$2$3"');
+          parsed=JSON.parse(agressivo);
+          console.log("[IA-EPISODIO] Reparo agressivo funcionou");
+        }catch(e2){
+          console.warn("[IA-EPISODIO] Reparo agressivo também falhou:",e2.message);
+          console.warn("[IA-EPISODIO] JSON BRUTO:",match[0].slice(0,1500));
+          // Tentativa 3: retry com a API (1 vez só, evita loop)
+          if(tentativa===1){
+            console.log("[IA-EPISODIO] Tentando novamente...");
+            setBuscando(false);
+            return buscarSugestoes(cidTxt,nomeTxt,2);
+          }
+          setErro("A IA gerou conteúdo malformado após 2 tentativas. Tente um diagnóstico relacionado ou cadastre as etapas manualmente.");
+          return;
         }
       }
-    }catch(e){console.warn(e);}
+      setSugestao(parsed);
+      setEtapas((parsed.etapas||[]).map((e,i)=>({...e,id:"temp_"+i,incluir:true})));
+    }catch(e){
+      console.warn("[IA-EPISODIO] Erro de rede/API:",e);
+      setErro("Erro de conexão com a IA. Verifique sua internet ou tente novamente.");
+    }
     finally{setBuscando(false);}
   };
 
