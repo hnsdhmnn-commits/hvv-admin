@@ -1840,7 +1840,7 @@ function TelaEngajamento(){
       {data:vacRegs},
       {data:epAtivos},
     ]=await Promise.all([
-      supabase.from("plano_cuidado").select("id,paciente_id,frequencia_tipo,meta_semanal,ativo,categoria,origem").in("paciente_id",pacIds).eq("ativo",true),
+      supabase.from("plano_cuidado").select("id,paciente_id,frequencia_tipo,meta_semanal,ativo,categoria,origem,created_at").in("paciente_id",pacIds).eq("ativo",true),
       supabase.from("plano_registros").select("paciente_id,tarefa_id,data,status").in("paciente_id",pacIds).gte("data",inicioStr),
       empresasIds.length>0
         ? supabase.from("rastreamento_config").select("id,empresa_id,nome,idade_inicio,idade_fim,genero,periodicidade_meses").in("empresa_id",empresasIds).eq("ativo",true)
@@ -1876,11 +1876,17 @@ function TelaEngajamento(){
     const planoP=dados.plano.filter(t=>t.paciente_id===p.id);
     const regsP=dados.registros.filter(r=>r.paciente_id===p.id&&r.status==="concluido");
     if(planoP.length===0)return{...p,adesao:null,esperado:0,feitos:0};
-    const semanas = periodo/7;
+    const hoje=new Date();
+    const periodoInicio=new Date(); periodoInicio.setDate(periodoInicio.getDate()-periodo);
+    // Pra cada tarefa, calcula esperado considerando MAX(criação, periodo_inicio)
     const esp = planoP.reduce((acc,t)=>{
-      if(t.frequencia_tipo==="diario")return acc+periodo;
-      if(t.frequencia_tipo==="n_vezes_semana")return acc+(t.meta_semanal||3)*semanas;
-      if(t.frequencia_tipo==="uma_vez_semana")return acc+semanas;
+      const criadoEm=t.created_at?new Date(t.created_at):periodoInicio;
+      const inicioReal=criadoEm>periodoInicio?criadoEm:periodoInicio;
+      const diasReais=Math.max(1,Math.ceil((hoje-inicioReal)/(86400000)));
+      const semanasReais=Math.max(1/7,diasReais/7);
+      if(t.frequencia_tipo==="diario")return acc+diasReais;
+      if(t.frequencia_tipo==="n_vezes_semana")return acc+(t.meta_semanal||3)*semanasReais;
+      if(t.frequencia_tipo==="uma_vez_semana")return acc+semanasReais;
       return acc;
     },0);
     const adesao=esp>0?Math.min(100,Math.round((regsP.length/esp)*100)):null;
