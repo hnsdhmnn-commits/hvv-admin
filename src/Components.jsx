@@ -1879,21 +1879,27 @@ function TelaEngajamento(){
     const periodoInicio=new Date(); periodoInicio.setDate(periodoInicio.getDate()-periodo);
     let esp=0;
     let feitos=0;
+    const debug=[];
     planoP.forEach(t=>{
       const criadoEm=t.created_at?new Date(t.created_at):periodoInicio;
       const inicioReal=criadoEm>periodoInicio?criadoEm:periodoInicio;
       const diasReais=Math.max(1,Math.ceil((hoje-inicioReal)/86400000));
       const semanasReais=Math.max(1/7,diasReais/7);
-      // Esperado para esta tarefa
-      if(t.frequencia_tipo==="diario")esp+=diasReais;
-      else if(t.frequencia_tipo==="n_vezes_semana")esp+=(t.meta_semanal||3)*semanasReais;
-      else if(t.frequencia_tipo==="uma_vez_semana")esp+=semanasReais;
-      // Feitos para esta tarefa: só registros dentro da janela real da tarefa
+      let espTarefa=0;
+      if(t.frequencia_tipo==="diario")espTarefa=diasReais;
+      else if(t.frequencia_tipo==="n_vezes_semana")espTarefa=(t.meta_semanal||3)*semanasReais;
+      else if(t.frequencia_tipo==="uma_vez_semana")espTarefa=semanasReais;
+      esp+=espTarefa;
       const inicioRealStr=inicioReal.toISOString().slice(0,10);
-      feitos+=dados.registros.filter(r=>
+      const regsTarefa=dados.registros.filter(r=>
         r.paciente_id===p.id&&r.tarefa_id===t.id&&r.status==="concluido"&&r.data>=inicioRealStr
-      ).length;
+      );
+      feitos+=regsTarefa.length;
+      debug.push({tarefa_id:t.id.slice(0,8),freq:t.frequencia_tipo,criadoEm:t.created_at?.slice(0,10),inicioReal:inicioRealStr,esp:espTarefa.toFixed(1),feitosCount:regsTarefa.length,sample:regsTarefa[0]?.data});
     });
+    if(p.email==="roberto.stone@chevo-demo.com"||p.email==="camila.stone@chevo-demo.com"){
+      console.log("[ADESAO-DEBUG]",p.nome,{esp:esp.toFixed(1),feitos,registrosTotalDoPac:dados.registros.filter(r=>r.paciente_id===p.id).length,debug});
+    }
     const adesao=esp>0?Math.min(100,Math.round((feitos/esp)*100)):null;
     return{...p,adesao,esperado:Math.round(esp),feitos};
   });
