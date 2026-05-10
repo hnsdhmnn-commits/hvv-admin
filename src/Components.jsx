@@ -1874,23 +1874,28 @@ function TelaEngajamento(){
 
   const adesaoPorPaciente=dados.pacientes.map(p=>{
     const planoP=dados.plano.filter(t=>t.paciente_id===p.id);
-    const regsP=dados.registros.filter(r=>r.paciente_id===p.id&&r.status==="concluido");
     if(planoP.length===0)return{...p,adesao:null,esperado:0,feitos:0};
     const hoje=new Date();
     const periodoInicio=new Date(); periodoInicio.setDate(periodoInicio.getDate()-periodo);
-    // Pra cada tarefa, calcula esperado considerando MAX(criação, periodo_inicio)
-    const esp = planoP.reduce((acc,t)=>{
+    let esp=0;
+    let feitos=0;
+    planoP.forEach(t=>{
       const criadoEm=t.created_at?new Date(t.created_at):periodoInicio;
       const inicioReal=criadoEm>periodoInicio?criadoEm:periodoInicio;
-      const diasReais=Math.max(1,Math.ceil((hoje-inicioReal)/(86400000)));
+      const diasReais=Math.max(1,Math.ceil((hoje-inicioReal)/86400000));
       const semanasReais=Math.max(1/7,diasReais/7);
-      if(t.frequencia_tipo==="diario")return acc+diasReais;
-      if(t.frequencia_tipo==="n_vezes_semana")return acc+(t.meta_semanal||3)*semanasReais;
-      if(t.frequencia_tipo==="uma_vez_semana")return acc+semanasReais;
-      return acc;
-    },0);
-    const adesao=esp>0?Math.min(100,Math.round((regsP.length/esp)*100)):null;
-    return{...p,adesao,esperado:Math.round(esp),feitos:regsP.length};
+      // Esperado para esta tarefa
+      if(t.frequencia_tipo==="diario")esp+=diasReais;
+      else if(t.frequencia_tipo==="n_vezes_semana")esp+=(t.meta_semanal||3)*semanasReais;
+      else if(t.frequencia_tipo==="uma_vez_semana")esp+=semanasReais;
+      // Feitos para esta tarefa: só registros dentro da janela real da tarefa
+      const inicioRealStr=inicioReal.toISOString().slice(0,10);
+      feitos+=dados.registros.filter(r=>
+        r.paciente_id===p.id&&r.tarefa_id===t.id&&r.status==="concluido"&&r.data>=inicioRealStr
+      ).length;
+    });
+    const adesao=esp>0?Math.min(100,Math.round((feitos/esp)*100)):null;
+    return{...p,adesao,esperado:Math.round(esp),feitos};
   });
 
   const pacientesComPlano=adesaoPorPaciente.filter(p=>p.adesao!==null);
