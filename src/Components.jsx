@@ -2209,45 +2209,33 @@ REGRAS CRÍTICAS:
     }
     setSalvando(true);setErro("");
     try{
-      // 1. Verificar se email já existe em pacientes
-      const{data:existente}=await supabase.from("pacientes").select("id").eq("email",email.trim()).maybeSingle();
-      if(existente){setErro("Este e-mail já está cadastrado em pacientes.");setSalvando(false);return;}
+      // Chama Edge Function que cria via service_role (não troca sessão)
+      const{data:sess}=await supabase.auth.getSession();
+      const token=sess?.session?.access_token;
+      if(!token){setErro("Sessão expirada. Faça login novamente.");setSalvando(false);return;}
 
-      // 2. Criar usuário no auth via signUp
-      const{data:authData,error:authErr}=await supabase.auth.signUp({
-        email:email.trim(),
-        password:senha,
-        options:{
-          data:{nome:nome.trim()},
-          emailRedirectTo:undefined, // sem confirmação por email
+      const SUPABASE_URL=supabase.supabaseUrl||"https://ahznewkkcyakkilaatas.supabase.co";
+      const res=await fetch(`${SUPABASE_URL}/functions/v1/criar-paciente`,{
+        method:"POST",
+        headers:{
+          "Content-Type":"application/json",
+          "Authorization":`Bearer ${token}`,
         },
+        body:JSON.stringify({
+          email:email.trim(),
+          password:senha,
+          nome:nome.trim(),
+          medico_id:medicoId,
+          empresa_id:empresaId||null,
+          genero:genero||null,
+          data_nascimento:dataNasc||null,
+          cargo:cargo||null,
+        }),
       });
-      if(authErr){
-        setErro("Erro ao criar acesso: "+authErr.message);
-        setSalvando(false);
-        return;
-      }
-      const userId=authData?.user?.id;
-      if(!userId){
-        setErro("Falha ao obter user_id após signUp. Verifique se o e-mail é válido.");
-        setSalvando(false);
-        return;
-      }
 
-      // 3. Inserir paciente vinculado ao user_id e empresa
-      const{error:pacErr}=await supabase.from("pacientes").insert({
-        user_id:userId,
-        nome:nome.trim(),
-        email:email.trim(),
-        medico_id:medicoId,
-        empresa_id:empresaId||null,
-        genero:genero||null,
-        data_nascimento:dataNasc||null,
-        cargo:cargo||null,
-        ativo:true,
-      });
-      if(pacErr){
-        setErro("Erro ao criar paciente: "+pacErr.message);
+      const result=await res.json();
+      if(!res.ok || result.error){
+        setErro(result.error||"Erro ao cadastrar paciente.");
         setSalvando(false);
         return;
       }
@@ -2260,7 +2248,7 @@ REGRAS CRÍTICAS:
         setGenero("");setDataNasc("");setCargo("");
       },1500);
     }catch(e){
-      setErro("Erro inesperado: "+(e.message||"desconhecido"));
+      setErro("Erro de rede: "+(e.message||"desconhecido"));
     }
     setSalvando(false);
   };
