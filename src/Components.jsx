@@ -119,7 +119,7 @@ async function carregarMetricasGerais(medicosFiltro=[]){
     comFiltro(supabase.from("pacientes").select("*",{count:"exact",head:true}).eq("ativo",true)),
     supabase.from("medicos").select("*",{count:"exact",head:true}),
     comFiltro(supabase.from("agendamentos").select("*",{count:"exact",head:true}).eq("status","realizada")),
-    comFiltro(supabase.from("checkins").select("*",{count:"exact",head:true}).gte("data",inicio30)),
+    supabase.from("checkins").select("*",{count:"exact",head:true}).gte("data",inicio30),
     comFiltro(supabase.from("documentos").select("tipo,created_at").gte("created_at",new Date(Date.now()-30*86400000).toISOString())),
     comFiltro(supabase.from("diagnosticos").select("cid,nome").order("created_at",{ascending:false}).limit(300)),
     comFiltro(supabase.from("plano_cuidado").select("*",{count:"exact",head:true}).eq("ativo",true)),
