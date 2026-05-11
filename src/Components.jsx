@@ -750,7 +750,6 @@ function TelaPoliticasConfig(){
     const{data}=await supabase.from(tabela)
       .select("*")
       .eq("empresa_id",empresaSel)
-      .order("ordem",{ascending:true})
       .order("nome");
     setItems(data||[]);
     setLoading(false);
